@@ -65,8 +65,12 @@ const app = new Elysia()
   .get("/", () => ({
     status: "success",
     message: "Servidor de Restaurante Pablito API ejecutandose correctamente en JavaScript",
-  }))
-  .listen(port);
+  }));
 
-console.log(`Servidor de la API del Restaurante Pablito activo en: http://localhost:${port}`);
+// Solo escuchar en puerto si NO estamos en Vercel
+if (!process.env.VERCEL) {
+  app.listen(port);
+  console.log(`Servidor de la API del Restaurante Pablito activo en: http://localhost:${port}`);
+}
+
 export default app;
