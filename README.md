@@ -1,107 +1,55 @@
-# Restaurante Pablito - API de Usuarios
+# API de Restaurante Pablito - Paulina Iza
 
-Backend para la gestion de usuarios, autenticacion y logs del Restaurante Pablito. Implementado con Bun, Elysia, y base de datos Turso (LibSQL).
+Este es el backend para el proyecto del Restaurante Pablito. Sirve para controlar el registro de usuarios, el inicio de sesion y para guardar lo que hace cada usuario en la tabla de logs de Turso.
 
-## Requisitos Previos
+## Como hacer funcionar el proyecto en tu compu
 
-- Tener instalado [Bun](https://bun.sh/) (version 1.0 o superior).
-
-## Instalacion y Ejecucion
-
-1. Instalar las dependencias de la API:
+1. Primero instala las dependencias ejecutando esto en tu terminal:
    ```bash
    bun install
    ```
 
-2. Crear y configurar el archivo `.env` basado en `.env.example`:
+2. Luego copia el archivo .env.example para crear tu .env propio:
    ```bash
    cp .env.example .env
    ```
+   (Abre el archivo .env que acabas de crear y pon tu base de datos de Turso, tu token y tu clave secreta de JWT).
 
-3. Ejecutar las migraciones para crear las tablas necesarias en Turso:
+3. Corre la migracion para crear la tabla de logs en Turso:
    ```bash
    bun src/db/migrate.js
    ```
 
-4. Correr el servidor en modo desarrollo (con recarga automatica/hot-reload):
+4. Levanta el servidor con:
    ```bash
    bun run dev
    ```
-   El servidor estara disponible en: `http://localhost:3000`.
+   El servidor se va a quedar corriendo en: http://localhost:3000.
 
-## Variables de Entorno (.env)
+---
 
-| Variable | Descripcion | Ejemplo |
-| :--- | :--- | :--- |
-| `PORT` | Puerto de escucha del servidor | `3000` |
-| `TURSO_DATABASE_URL` | URL de conexion de la base de datos Turso | `libsql://restaurante-pablito.turso.io` |
-| `TURSO_AUTH_TOKEN` | Token de autorizacion de base de datos Turso | `eyJhbGci...` |
-| `JWT_SECRET` | Clave secreta para firmar y verificar tokens JWT | `tu_clave_secreta_aqui` |
-| `JWT_EXPIRY` | Tiempo de expiracion del token JWT | `24h` |
+## Las rutas que tiene la API
 
-## Rutas de la API (Prefijo: `/api/usuarios`)
+Todas las rutas empiezan con el prefijo `/api/usuarios`.
 
-### 1. Registro de Cliente
-- **Ruta**: `POST /registro`
-- **Acceso**: Publico
-- **Accion**: Registra un nuevo usuario con rol de `cliente` y lo loguea automaticamente devolviendo un token.
-- **Cuerpo de la Peticion (JSON)**:
-  ```json
-  {
-    "nombre": "Juan",
-    "apellido": "Perez",
-    "correo": "juan.perez@ejemplo.com",
-    "contrasena": "claveSegura123",
-    "telefono": "987654321", // Opcional
-    "direccion": "Av. Del Sol 123" // Opcional
-  }
-  ```
+### POST /registro
+Es publica. Sirve para registrar clientes nuevos en el sistema.
+Tienes que mandarle en el body:
+- nombre
+- apellido
+- correo
+- contrasena
+- telefono (si quieres, es opcional)
+- direccion (si quieres, es opcional)
 
-### 2. Inicio de Sesion
-- **Ruta**: `POST /login`
-- **Acceso**: Publico
-- **Accion**: Valida las credenciales y devuelve el token JWT con los datos basicos del usuario.
-- **Cuerpo de la Peticion (JSON)**:
-  ```json
-  {
-    "correo": "juan.perez@ejemplo.com",
-    "contrasena": "claveSegura123"
-  }
-  ```
+### POST /login
+Es publica. Sirve para iniciar sesion metiendo tu correo y contrasena. Si todo esta bien, te devuelve el token JWT para que puedas entrar a las demas secciones.
 
-### 3. Obtener Perfil de Usuario
-- **Ruta**: `GET /perfil`
-- **Acceso**: Protegido (requiere cabecera `Authorization: Bearer <TOKEN>`)
-- **Accion**: Devuelve los datos del perfil del usuario autenticado actual.
+### GET /perfil
+Es protegida. Tienes que mandar el token en la cabecera (Header) de la peticion con `Authorization: Bearer <TOKEN>`. Te devuelve los datos del usuario logueado.
 
-### 4. Modificar Perfil de Usuario
-- **Ruta**: `PUT /perfil`
-- **Acceso**: Protegido (requiere cabecera `Authorization: Bearer <TOKEN>`)
-- **Accion**: Modifica la informacion del perfil del usuario y opcionalmente cambia su contraseña.
-- **Cuerpo de la Peticion (JSON)**:
-  ```json
-  {
-    "nombre": "Juan Carlos",
-    "apellido": "Perez Gomez",
-    "telefono": "999888777", // Opcional
-    "direccion": "Nueva Direccion 456", // Opcional
-    "contrasenaActual": "claveSegura123", // Opcional (obligatorio si envias contrasenaNueva)
-    "contrasenaNueva": "nuevaClave456" // Opcional
-  }
-  ```
+### PUT /perfil
+Es protegida. Sirve para que el usuario cambie su nombre, apellido, telefono y direccion. Tambien puedes cambiar la clave aqui si mandas en el body `contrasenaActual` y `contrasenaNueva`.
 
-### 5. Crear Administrador (Exclusivo)
-- **Ruta**: `POST /admin/crear`
-- **Acceso**: Protegido (requiere cabecera `Authorization: Bearer <TOKEN>` de un usuario con rol = `administrador`)
-- **Accion**: Permite a un administrador crear nuevas cuentas de administradores en el sistema.
-- **Cuerpo de la Peticion (JSON)**:
-  ```json
-  {
-    "nombre": "Ana",
-    "apellido": "Admin",
-    "correo": "ana.admin@ejemplo.com",
-    "contrasena": "adminClave99",
-    "telefono": "955555555", // Opcional
-    "direccion": "Oficinas Centrales" // Opcional
-  }
-  ```
+### POST /admin/crear
+Es protegida y solo sirve para usuarios administradores. La usas para registrar un nuevo usuario con rol de administrador de forma segura.
