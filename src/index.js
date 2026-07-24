@@ -2,6 +2,8 @@ import { Elysia } from "elysia";
 import { cors } from "@elysiajs/cors";
 import { jwt } from "@elysiajs/jwt";
 import { usuariosRoutes } from "./routes/usuarios.routes.js";
+import { productosRoutes } from "./routes/productos.routes.js";
+import { pedidosRoutes } from "./routes/pedidos.routes.js";
 
 // Leer variables de entorno
 const port = process.env.PORT || 3000;
@@ -14,7 +16,7 @@ const app = new Elysia()
   .use(
     cors({
       origin: "*",
-      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+      methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
       allowedHeaders: ["Content-Type", "Authorization"],
     })
   )
@@ -59,8 +61,10 @@ const app = new Elysia()
       message: error.message || "Ocurrio un error inesperado en el servidor",
     };
   })
-  // Registrar modulo de usuarios
+  // Registrar modulos de usuarios, productos y pedidos
   .use(usuariosRoutes)
+  .use(productosRoutes)
+  .use(pedidosRoutes)
   // Endpoint de salud basico
   .get("/", () => ({
     status: "success",

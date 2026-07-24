@@ -1,3 +1,4 @@
+// Conexion a la base de datos Turso usando LibSQL
 import { createClient } from "@libsql/client";
 
 // Obtener variables de entorno. Bun las carga automaticamente de .env
