@@ -14,8 +14,8 @@ export async function registrarCliente({ nombre, apellido, correo, contrasena, t
   const contrasenaHash = await Bun.password.hash(contrasena);
   
   const result = await db.execute({
-    sql: `INSERT INTO usuarios (nombre, apellido, correo, contrasena_hash, telefono, direccion, rol, activo)
-          VALUES (?, ?, ?, ?, ?, ?, 'cliente', 1)
+    sql: `INSERT INTO usuarios (nombre, apellido, correo, contrasena_hash, telefono, direccion, rol, activo, creado_en)
+          VALUES (?, ?, ?, ?, ?, ?, 'cliente', 1, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
           RETURNING id, nombre, apellido, correo, telefono, direccion, rol, activo, creado_en, actualizado_en`,
     args: [nombre, apellido, correo, contrasenaHash, telefono, direccion],
   });

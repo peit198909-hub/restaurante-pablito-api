@@ -1,7 +1,95 @@
 import { Elysia, t } from "elysia";
 import * as service from "../services/pedidos.service.js";
+import { orderEvents } from "../utils/orderEvents.js";
 
 export const pedidosRoutes = new Elysia({ prefix: "/api/pedidos" })
+  // Endpoint de Server-Sent Events (SSE) en tiempo real para seguimiento de pedidos
+  .get("/stream", async ({ query, headers, jwt, set }) => {
+    // Extraer token desde header Authorization o desde parametro de consulta ?token=
+    const authHeader = headers["authorization"];
+    let token = null;
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      token = authHeader.split(" ")[1];
+    } else if (query && query.token) {
+      token = query.token;
+    }
+
+    if (!token) {
+      set.status = 401;
+      return { status: "error", message: "Token no proporcionado para conexion SSE" };
+    }
+
+    const payload = await jwt.verify(token);
+    if (!payload) {
+      set.status = 401;
+      return { status: "error", message: "Token invalido o expirado para conexion SSE" };
+    }
+
+    const usuarioId = payload.id;
+    const esAdmin = payload.rol === "administrador";
+
+    const stream = new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+
+        const sendEvent = (event, data) => {
+          try {
+            controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+          } catch (err) {
+            // El stream se ha cerrado
+          }
+        };
+
+        // Enviar handshake inicial
+        sendEvent("conexion", {
+          status: "conectado",
+          message: "Conexión SSE establecida con éxito",
+          usuarioId,
+          esAdmin,
+        });
+
+        // Intervalo de ping/heartbeat cada 15 segundos para mantener viva la conexión HTTP
+        const pingInterval = setInterval(() => {
+          try {
+            controller.enqueue(encoder.encode(": ping\n\n"));
+          } catch (err) {
+            clearInterval(pingInterval);
+          }
+        }, 15000);
+
+        // Escuchar eventos de pedidos
+        const listener = (data) => {
+          // Filtrar: Los administradores reciben todos los eventos; los clientes solo sus propios pedidos
+          if (esAdmin || data.usuario_id === usuarioId) {
+            sendEvent("pedido_actualizado", data);
+          }
+        };
+
+        orderEvents.on("pedido_actualizado", listener);
+
+        // Guardar referencia de desuscripcion y limpieza
+        controller._cleanup = () => {
+          clearInterval(pingInterval);
+          orderEvents.removeListener("pedido_actualizado", listener);
+        };
+      },
+      cancel(controller) {
+        if (controller && typeof controller._cleanup === "function") {
+          controller._cleanup();
+        }
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache, no-transform",
+        "Connection": "keep-alive",
+        "Access-Control-Allow-Origin": "*",
+        "X-Accel-Buffering": "no",
+      },
+    });
+  })
   // Grupo protegido para usuarios autenticados (clientes y administradores)
   .guard({
     beforeHandle: async ({ jwt, headers, set }) => {
@@ -19,6 +107,21 @@ export const pedidosRoutes = new Elysia({ prefix: "/api/pedidos" })
       }
     }
   }, (app) => app
+    // Endpoint para métricas y KPIs del Dashboard del Administrador
+    .get("/dashboard", async ({ headers, jwt, set }) => {
+      const authHeader = headers["authorization"];
+      const token = authHeader.split(" ")[1];
+      const payload = await jwt.verify(token);
+
+      if (!payload || payload.rol !== "administrador") {
+        set.status = 403;
+        return { status: "error", message: "Forbidden: Se requieren permisos de administrador" };
+      }
+
+      const metricas = await service.obtenerMetricasDashboard();
+      return { status: "success", metricas };
+    })
+
     // 1. Crear nuevo pedido (cliente / admin)
     .post("/", async ({ body, headers, jwt, set }) => {
       const authHeader = headers["authorization"];
@@ -32,6 +135,7 @@ export const pedidosRoutes = new Elysia({ prefix: "/api/pedidos" })
         telefono_contacto: body.telefono_contacto,
         notas: body.notas,
         metodo_pago: body.metodo_pago,
+        distancia_km: body.distancia_km,
       });
 
       if (resultado.errorStatus) {
@@ -62,14 +166,14 @@ export const pedidosRoutes = new Elysia({ prefix: "/api/pedidos" })
       })
     })
 
-    // 2. Obtener historial de mis pedidos (cliente autenticado)
-    .get("/mis-pedidos", async ({ headers, jwt }) => {
+    // 2. Obtener historial de mis pedidos (cliente autenticado con paginacion)
+    .get("/mis-pedidos", async ({ query, headers, jwt }) => {
       const authHeader = headers["authorization"];
       const token = authHeader.split(" ")[1];
       const payload = await jwt.verify(token);
 
-      const pedidos = await service.obtenerPedidosCliente(payload.id);
-      return { status: "success", pedidos };
+      const res = await service.obtenerPedidosCliente(payload.id, query.page, query.limit);
+      return { status: "success", ...res };
     })
 
     // Sub-grupo exclusivo para administradores
@@ -85,12 +189,12 @@ export const pedidosRoutes = new Elysia({ prefix: "/api/pedidos" })
         }
       }
     }, (adminApp) => adminApp
-      // 3. Listar todos los pedidos (solo admin)
+      // 3. Listar todos los pedidos (solo admin con paginacion)
       .get("/", async ({ query }) => {
         const estado = query.estado || null;
         const fecha = query.fecha || null;
-        const pedidos = await service.obtenerTodosPedidosAdmin(estado, fecha);
-        return { status: "success", pedidos };
+        const res = await service.obtenerTodosPedidosAdmin(estado, fecha, query.page, query.limit);
+        return { status: "success", ...res };
       })
 
       // 4. Cambiar estado de un pedido (solo admin)

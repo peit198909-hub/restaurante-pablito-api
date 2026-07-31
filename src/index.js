@@ -4,6 +4,12 @@ import { jwt } from "@elysiajs/jwt";
 import { usuariosRoutes } from "./routes/usuarios.routes.js";
 import { productosRoutes } from "./routes/productos.routes.js";
 import { pedidosRoutes } from "./routes/pedidos.routes.js";
+import { repartidoresRoutes } from "./routes/repartidores.routes.js";
+import { configuracionRoutes } from "./routes/configuracion.routes.js";
+import { migrateConfig } from "./db/migrate_config.js";
+
+// Ejecutar migración de la tabla de configuración
+migrateConfig();
 
 // Leer variables de entorno
 const port = process.env.PORT || 3000;
@@ -61,10 +67,12 @@ const app = new Elysia()
       message: error.message || "Ocurrio un error inesperado en el servidor",
     };
   })
-  // Registrar modulos de usuarios, productos y pedidos
+  // Registrar modulos de usuarios, productos, pedidos, repartidores y configuracion
   .use(usuariosRoutes)
   .use(productosRoutes)
   .use(pedidosRoutes)
+  .use(repartidoresRoutes)
+  .use(configuracionRoutes)
   // Endpoint de salud basico
   .get("/", () => ({
     status: "success",

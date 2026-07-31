@@ -55,10 +55,10 @@ export const productosRoutes = new Elysia({ prefix: "/api" })
       }
     }
   }, (app) => app
-    // 4. Obtener todos los productos (incluyendo no disponibles)
-    .get("/productos/admin", async () => {
-      const productos = await service.obtenerTodosProductosAdmin();
-      return { status: "success", productos };
+    // 4. Obtener todos los productos para administrador (con paginacion)
+    .get("/productos/admin", async ({ query }) => {
+      const res = await service.obtenerTodosProductosAdmin(query.page, query.limit);
+      return { status: "success", ...res };
     })
 
     // 5. Crear producto

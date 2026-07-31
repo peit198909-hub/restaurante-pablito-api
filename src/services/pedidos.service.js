@@ -1,5 +1,7 @@
 import { db } from "../db/client.js";
 import { calcularTotales } from "../utils/precios.js";
+import { orderEvents } from "../utils/orderEvents.js";
+import { obtenerConfiguracion, estaAbierto } from "./configuracion.service.js";
 
 // Tabla de transiciones de estado permitidas para asegurar coherencia en el flujo
 const TRANSICIONES_PERMITIDAS = {
@@ -13,7 +15,16 @@ const TRANSICIONES_PERMITIDAS = {
 };
 
 // 1. Crear un pedido con calculo estricto del servidor y validaciones
-export async function crearPedido({ usuario_id, items, direccion_entrega, telefono_contacto, notas, metodo_pago }) {
+export async function crearPedido({ usuario_id, items, direccion_entrega, telefono_contacto, notas, metodo_pago, distancia_km = 0 }) {
+  // 0. Validar horario de atención del restaurante
+  const config = await obtenerConfiguracion();
+  if (!estaAbierto(config)) {
+    return {
+      errorStatus: 400,
+      message: `El restaurante se encuentra cerrado en este momento. Horario de atención: ${config.hora_apertura} a ${config.hora_cierre} (${config.dias_atencion}).`,
+    };
+  }
+
   if (!items || !Array.isArray(items) || items.length === 0) {
     return { errorStatus: 400, message: "El carrito de compras no puede estar vacio" };
   }
@@ -78,13 +89,27 @@ export async function crearPedido({ usuario_id, items, direccion_entrega, telefo
     itemsProcesados.map((i) => ({ precio: i.precio_unitario, cantidad: i.cantidad }))
   );
 
+  // 4. Calcular costo de envío por distancia (KM)
+  const distKm = Math.max(0, parseFloat(distancia_km || 0));
+  let costoEnvio = 0;
+  if (distKm > 0) {
+    if (distKm > config.distancia_maxima_km) {
+      return {
+        errorStatus: 422,
+        message: `La distancia de envío (${distKm} km) supera el límite máximo del local (${config.distancia_maxima_km} km).`,
+      };
+    }
+    costoEnvio = Math.round((config.costo_base_envio + (distKm * config.precio_por_km)) * 100) / 100;
+  }
+
+  const totalFinal = Math.round((totales.subtotal + totales.impuesto + costoEnvio) * 100) / 100;
   const metodoPagoFinal = ["efectivo", "transferencia", "otro"].includes(metodo_pago) ? metodo_pago : "efectivo";
 
-  // 4. Insercion en base de datos
-  // Insertar encabezado de pedido
+  // 5. Insercion en base de datos
+  // Insertar encabezado de pedido con costo_envio y distancia_km
   const insertPedidoRes = await db.execute({
-    sql: `INSERT INTO pedidos (usuario_id, direccion_entrega, telefono_contacto, notas, estado, subtotal, impuesto, total, metodo_pago)
-          VALUES (?, ?, ?, ?, 'pendiente', ?, ?, ?, ?)
+    sql: `INSERT INTO pedidos (usuario_id, direccion_entrega, telefono_contacto, notas, estado, subtotal, impuesto, costo_envio, distancia_km, total, metodo_pago, creado_en)
+          VALUES (?, ?, ?, ?, 'pendiente', ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
           RETURNING *`,
     args: [
       usuario_id,
@@ -93,7 +118,9 @@ export async function crearPedido({ usuario_id, items, direccion_entrega, telefo
       notas || null,
       totales.subtotal,
       totales.impuesto,
-      totales.total,
+      costoEnvio,
+      distKm,
+      totalFinal,
       metodoPagoFinal,
     ],
   });
@@ -115,14 +142,54 @@ export async function crearPedido({ usuario_id, items, direccion_entrega, telefo
     });
   }
 
+  // Emitir evento SSE de creacion de pedido
+  orderEvents.emit("pedido_actualizado", {
+    tipo: "creado",
+    pedido_id: nuevoPedido.id,
+    usuario_id: nuevoPedido.usuario_id,
+    estado: nuevoPedido.estado,
+    total: nuevoPedido.total,
+    pedido: nuevoPedido,
+  });
+
   return {
     pedido: nuevoPedido,
     items: detallesGuardados,
   };
 }
 
-// 2. Obtener historial de pedidos de un cliente
-export async function obtenerPedidosCliente(usuario_id) {
+// 2. Obtener historial de pedidos de un cliente con paginacion opcional
+export async function obtenerPedidosCliente(usuario_id, page = null, limit = null) {
+  const pageNum = parseInt(page, 10);
+  const limitNum = parseInt(limit, 10);
+
+  if (pageNum > 0 && limitNum > 0) {
+    const offset = (pageNum - 1) * limitNum;
+    const countRes = await db.execute({
+      sql: "SELECT COUNT(*) as total FROM pedidos WHERE usuario_id = ?",
+      args: [usuario_id],
+    });
+    const total = parseInt(countRes.rows[0]?.total || 0, 10);
+
+    const result = await db.execute({
+      sql: `SELECT p.*, 
+                   (SELECT COUNT(*) FROM detalles_pedidos dp WHERE dp.pedido_id = p.id) as total_items
+            FROM pedidos p
+            WHERE p.usuario_id = ?
+            ORDER BY p.creado_en DESC
+            LIMIT ? OFFSET ?`,
+      args: [usuario_id, limitNum, offset],
+    });
+
+    return {
+      pedidos: result.rows,
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(total / limitNum) || 1,
+    };
+  }
+
   const result = await db.execute({
     sql: `SELECT p.*, 
                  (SELECT COUNT(*) FROM detalles_pedidos dp WHERE dp.pedido_id = p.id) as total_items
@@ -131,7 +198,13 @@ export async function obtenerPedidosCliente(usuario_id) {
           ORDER BY p.creado_en DESC`,
     args: [usuario_id],
   });
-  return result.rows;
+  return {
+    pedidos: result.rows,
+    total: result.rows.length,
+    page: 1,
+    limit: result.rows.length,
+    totalPages: 1,
+  };
 }
 
 // 3. Obtener detalle de pedido por ID con verificacion de propietario o admin
@@ -176,8 +249,27 @@ export async function obtenerDetallePedido(pedido_id, usuario_id, esAdmin = fals
   };
 }
 
-// 4. Obtener todos los pedidos para administrador (con filtros opcionales)
-export async function obtenerTodosPedidosAdmin(estado = null, fecha = null) {
+// 4. Obtener todos los pedidos para administrador (con filtros y paginacion)
+export async function obtenerTodosPedidosAdmin(estado = null, fecha = null, page = null, limit = null) {
+  let whereSql = " WHERE 1=1";
+  const args = [];
+
+  if (estado) {
+    whereSql += " AND p.estado = ?";
+    args.push(estado);
+  }
+
+  if (fecha) {
+    whereSql += " AND DATE(p.creado_en) = ?";
+    args.push(fecha);
+  }
+
+  const countRes = await db.execute({
+    sql: `SELECT COUNT(*) as total FROM pedidos p ${whereSql}`,
+    args,
+  });
+  const total = parseInt(countRes.rows[0]?.total || 0, 10);
+
   let sql = `SELECT p.*, 
                     u.nombre as cliente_nombre, 
                     u.apellido as cliente_apellido, 
@@ -185,23 +277,34 @@ export async function obtenerTodosPedidosAdmin(estado = null, fecha = null) {
                     (SELECT COUNT(*) FROM detalles_pedidos dp WHERE dp.pedido_id = p.id) as total_items
              FROM pedidos p
              JOIN usuarios u ON p.usuario_id = u.id
-             WHERE 1=1`;
-  const args = [];
+             ${whereSql}
+             ORDER BY p.creado_en DESC`;
 
-  if (estado) {
-    sql += " AND p.estado = ?";
-    args.push(estado);
+  const pageNum = parseInt(page, 10);
+  const limitNum = parseInt(limit, 10);
+
+  if (pageNum > 0 && limitNum > 0) {
+    const offset = (pageNum - 1) * limitNum;
+    sql += " LIMIT ? OFFSET ?";
+    const pageArgs = [...args, limitNum, offset];
+    const result = await db.execute({ sql, args: pageArgs });
+    return {
+      pedidos: result.rows,
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(total / limitNum) || 1,
+    };
   }
-
-  if (fecha) {
-    sql += " AND DATE(p.creado_en) = ?";
-    args.push(fecha);
-  }
-
-  sql += " ORDER BY p.creado_en DESC";
 
   const result = await db.execute({ sql, args });
-  return result.rows;
+  return {
+    pedidos: result.rows,
+    total,
+    page: 1,
+    limit: total,
+    totalPages: 1,
+  };
 }
 
 // 5. Cambiar el estado de un pedido por parte de un administrador
@@ -242,5 +345,63 @@ export async function cambiarEstadoPedido(pedido_id, nuevoEstado) {
     args: [nuevoEstado, pedido_id],
   });
 
-  return { pedido: upRes.rows[0] };
+  const pedidoActualizado = upRes.rows[0];
+
+  // Emitir evento SSE de cambio de estado de pedido
+  orderEvents.emit("pedido_actualizado", {
+    tipo: "actualizado",
+    pedido_id: pedidoActualizado.id,
+    usuario_id: pedidoActualizado.usuario_id,
+    estado: pedidoActualizado.estado,
+    pedido: pedidoActualizado,
+  });
+
+  return { pedido: pedidoActualizado };
+}
+
+// 5. Obtener métricas y KPIs para el Dashboard del Administrador
+export async function obtenerMetricasDashboard() {
+  const ventasRes = await db.execute(`
+    SELECT 
+      SUM(CASE WHEN estado = 'entregado' THEN total ELSE 0 END) as total_ventas,
+      SUM(CASE WHEN estado = 'entregado' AND DATE(creado_en) = DATE('now') THEN total ELSE 0 END) as ventas_hoy,
+      COUNT(CASE WHEN estado = 'entregado' THEN 1 END) as entregados_count,
+      COUNT(CASE WHEN estado IN ('pendiente', 'confirmado', 'en_preparacion', 'listo', 'en_camino') THEN 1 END) as activos_count,
+      COUNT(CASE WHEN estado = 'cancelado' THEN 1 END) as cancelados_count,
+      COUNT(*) as total_pedidos
+    FROM pedidos
+  `);
+
+  const stats = ventasRes.rows[0] || {};
+  const totalVentas = Number(stats.total_ventas || 0);
+  const ventasHoy = Number(stats.ventas_hoy || 0);
+  const entregadosCount = Number(stats.entregados_count || 0);
+  const activosCount = Number(stats.activos_count || 0);
+  const canceladosCount = Number(stats.cancelados_count || 0);
+  const totalPedidos = Number(stats.total_pedidos || 0);
+
+  const ticketPromedio = entregadosCount > 0 ? (totalVentas / entregadosCount).toFixed(2) : "0.00";
+
+  // Top 5 productos más vendidos
+  const topRes = await db.execute(`
+    SELECT pr.nombre, pr.categoria, pr.imagen_url, SUM(dp.cantidad) as total_vendidos, SUM(dp.subtotal) as total_ingresos
+    FROM detalles_pedidos dp
+    JOIN productos pr ON dp.producto_id = pr.id
+    JOIN pedidos p ON dp.pedido_id = p.id
+    WHERE p.estado = 'entregado'
+    GROUP BY pr.id
+    ORDER BY total_vendidos DESC
+    LIMIT 5
+  `);
+
+  return {
+    totalVentas,
+    ventasHoy,
+    entregadosCount,
+    activosCount,
+    canceladosCount,
+    totalPedidos,
+    ticketPromedio: Number(ticketPromedio),
+    topProductos: topRes.rows || [],
+  };
 }
