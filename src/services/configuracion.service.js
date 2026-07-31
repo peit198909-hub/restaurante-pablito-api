@@ -97,16 +97,31 @@ export async function actualizarConfiguracion(datos) {
   return await obtenerConfiguracion();
 }
 
+// Obtener la hora actual en formato HH:mm según la zona horaria de Ecuador (America/Guayaquil)
+export function obtenerHoraActualEcuador() {
+  const options = {
+    timeZone: "America/Guayaquil",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  };
+  const parts = new Intl.DateTimeFormat("en-US", options).formatToParts(new Date());
+  let h = "00", m = "00";
+  for (const p of parts) {
+    if (p.type === "hour") h = p.value;
+    if (p.type === "minute") m = p.value;
+  }
+  if (h === "24") h = "00";
+  return `${h.padStart(2, "0")}:${m.padStart(2, "0")}`;
+}
+
 // Verificar si el local se encuentra abierto actualmente según horario y estado manual
 export function estaAbierto(config) {
   if (!config) return false;
   if (config.abierto_manual === 0) return false;
 
-  // Formato de hora en HH:mm local
-  const ahora = new Date();
-  const horas = String(ahora.getHours()).padStart(2, "0");
-  const minutos = String(ahora.getMinutes()).padStart(2, "0");
-  const horaActual = `${horas}:${minutos}`;
+  // Formato de hora HH:mm en zona horaria Ecuador
+  const horaActual = obtenerHoraActualEcuador();
 
   const apertura = config.hora_apertura || "08:00";
   const cierre = config.hora_cierre || "22:00";
