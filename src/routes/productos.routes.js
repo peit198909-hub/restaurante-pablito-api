@@ -55,6 +55,94 @@ export const productosRoutes = new Elysia({ prefix: "/api" })
       }
     }
   }, (app) => app
+    // Rutas de administración de Categorías
+    .get("/categorias/admin", async () => {
+      const categorias = await service.obtenerTodasCategoriasAdmin();
+      return { status: "success", categorias };
+    })
+    .get("/productos/categorias/admin", async () => {
+      const categorias = await service.obtenerTodasCategoriasAdmin();
+      return { status: "success", categorias };
+    })
+    .post("/categorias", async ({ body, set }) => {
+      const res = await service.crearCategoria(body);
+      if (res.errorStatus) {
+        set.status = res.errorStatus;
+        return { status: "error", message: res.message };
+      }
+      set.status = 201;
+      return { status: "success", message: "Categoría creada con éxito", categoria: res.categoria };
+    }, {
+      body: t.Object({
+        nombre: t.String({ minLength: 2 }),
+        descripcion: t.Optional(t.String()),
+        orden: t.Optional(t.Number()),
+        activa: t.Optional(t.Boolean()),
+      })
+    })
+    .post("/productos/categorias", async ({ body, set }) => {
+      const res = await service.crearCategoria(body);
+      if (res.errorStatus) {
+        set.status = res.errorStatus;
+        return { status: "error", message: res.message };
+      }
+      set.status = 201;
+      return { status: "success", message: "Categoría creada con éxito", categoria: res.categoria };
+    }, {
+      body: t.Object({
+        nombre: t.String({ minLength: 2 }),
+        descripcion: t.Optional(t.String()),
+        orden: t.Optional(t.Number()),
+        activa: t.Optional(t.Boolean()),
+      })
+    })
+    .put("/categorias/:id", async ({ params, body, set }) => {
+      const res = await service.editarCategoria(params.id, body);
+      if (res.errorStatus) {
+        set.status = res.errorStatus;
+        return { status: "error", message: res.message };
+      }
+      return { status: "success", message: "Categoría actualizada con éxito", categoria: res.categoria };
+    }, {
+      body: t.Object({
+        nombre: t.Optional(t.String()),
+        descripcion: t.Optional(t.String()),
+        orden: t.Optional(t.Number()),
+        activa: t.Optional(t.Boolean()),
+      })
+    })
+    .put("/productos/categorias/:id", async ({ params, body, set }) => {
+      const res = await service.editarCategoria(params.id, body);
+      if (res.errorStatus) {
+        set.status = res.errorStatus;
+        return { status: "error", message: res.message };
+      }
+      return { status: "success", message: "Categoría actualizada con éxito", categoria: res.categoria };
+    }, {
+      body: t.Object({
+        nombre: t.Optional(t.String()),
+        descripcion: t.Optional(t.String()),
+        orden: t.Optional(t.Number()),
+        activa: t.Optional(t.Boolean()),
+      })
+    })
+    .delete("/categorias/:id", async ({ params, set }) => {
+      const res = await service.eliminarCategoria(params.id);
+      if (res.errorStatus) {
+        set.status = res.errorStatus;
+        return { status: "error", message: res.message };
+      }
+      return { status: "success", message: res.message };
+    })
+    .delete("/productos/categorias/:id", async ({ params, set }) => {
+      const res = await service.eliminarCategoria(params.id);
+      if (res.errorStatus) {
+        set.status = res.errorStatus;
+        return { status: "error", message: res.message };
+      }
+      return { status: "success", message: res.message };
+    })
+
     // 4. Obtener todos los productos para administrador (con paginacion)
     .get("/productos/admin", async ({ query }) => {
       const res = await service.obtenerTodosProductosAdmin(query.page, query.limit);
@@ -83,6 +171,7 @@ export const productosRoutes = new Elysia({ prefix: "/api" })
         categoria: t.String({ minLength: 2 }),
         imagen_url: t.Optional(t.String()),
         disponible: t.Optional(t.Boolean()),
+        stock: t.Optional(t.Number()),
       })
     })
 
@@ -118,6 +207,7 @@ export const productosRoutes = new Elysia({ prefix: "/api" })
         categoria: t.String({ minLength: 2 }),
         imagen_url: t.Optional(t.String()),
         disponible: t.Optional(t.Boolean()),
+        stock: t.Optional(t.Number()),
       })
     })
 

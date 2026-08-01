@@ -19,8 +19,9 @@ CREATE TABLE IF NOT EXISTS usuarios (
     -- Rol del usuario dentro del sistema (HU-06)
     -- 'cliente'       -> usuario que realiza pedidos
     -- 'administrador' -> personal del restaurante que gestiona pedidos/menú/entregas
+    -- 'repartidor'    -> motorizado/repartidor que atiende entregas asignadas
     rol             TEXT    NOT NULL DEFAULT 'cliente'
-                    CHECK (rol IN ('cliente', 'administrador')),
+                    CHECK (rol IN ('cliente', 'administrador', 'repartidor')),
 
     -- Estado de la cuenta (permite desactivar sin borrar el registro)
     activo          INTEGER NOT NULL DEFAULT 1
@@ -68,6 +69,10 @@ CREATE TABLE IF NOT EXISTS productos (
     -- Control de inventario y disponibilidad
     disponible      INTEGER NOT NULL DEFAULT 1
                     CHECK (disponible IN (0, 1)),
+
+    -- Unidades disponibles en inventario
+    stock           INTEGER NOT NULL DEFAULT 50
+                    CHECK (stock >= 0),
  
     -- URL o ruta de la imagen del producto (opcional)
     imagen_url      TEXT,
@@ -138,12 +143,26 @@ CREATE TABLE IF NOT EXISTS pedidos (
     metodo_pago     TEXT    NOT NULL DEFAULT 'efectivo'
                     CHECK (metodo_pago IN ('efectivo', 'transferencia', 'otro')),
  
+    -- URL del comprobante de transferencia (imagen subida a Cloudinary)
+    -- Solo aplica cuando metodo_pago = 'transferencia'
+    comprobante_url TEXT,
+ 
+    -- Modalidad de entrega del pedido
+    -- 'delivery' -> Envío a domicilio con costo según distancia
+    -- 'retiro'   -> Retiro en el local por parte del cliente ($0 costo de envío)
+    tipo_entrega    TEXT    NOT NULL DEFAULT 'delivery'
+                    CHECK (tipo_entrega IN ('delivery', 'retiro')),
+
+    -- Repartidor asignado dinámicamente (usuario con rol 'repartidor')
+    repartidor_id   INTEGER,
+ 
     -- Timestamp de creación y actualización
     creado_en       TEXT    NOT NULL DEFAULT (datetime('now')),
     actualizado_en  TEXT    NOT NULL DEFAULT (datetime('now')),
  
     -- Restricción de clave foránea
-    FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE CASCADE
+    FOREIGN KEY (usuario_id) REFERENCES usuarios(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+    FOREIGN KEY (repartidor_id) REFERENCES usuarios(id) ON DELETE SET NULL ON UPDATE CASCADE
 );
  
 -- Índices para tabla pedidos

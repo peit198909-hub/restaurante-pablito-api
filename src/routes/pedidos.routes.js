@@ -122,6 +122,65 @@ export const pedidosRoutes = new Elysia({ prefix: "/api/pedidos" })
       return { status: "success", metricas };
     })
 
+    // Endpoint para entrega activa del repartidor autenticado
+    .get("/repartidor/activo", async ({ headers, jwt, set }) => {
+      const authHeader = headers["authorization"];
+      const token = authHeader.split(" ")[1];
+      const payload = await jwt.verify(token);
+
+      if (!payload || (payload.rol !== "repartidor" && payload.rol !== "administrador")) {
+        set.status = 403;
+        return { status: "error", message: "Se requieren permisos de repartidor" };
+      }
+
+      const res = await service.obtenerEntregaActivaRepartidor(payload.id);
+      return { status: "success", entrega: res };
+    })
+
+    // Endpoint para cambiar estado de entrega por repartidor (en_camino / entregado)
+    .patch("/repartidor/estado", async ({ body, headers, jwt, set }) => {
+      const authHeader = headers["authorization"];
+      const token = authHeader.split(" ")[1];
+      const payload = await jwt.verify(token);
+
+      if (!payload || (payload.rol !== "repartidor" && payload.rol !== "administrador")) {
+        set.status = 403;
+        return { status: "error", message: "Se requieren permisos de repartidor" };
+      }
+
+      const res = await service.cambiarEstadoPorRepartidor(body.pedido_id, payload.id, body.estado);
+      if (res.errorStatus) {
+        set.status = res.errorStatus;
+        return { status: "error", message: res.message };
+      }
+
+      return {
+        status: "success",
+        message: `Estado de entrega actualizado a '${body.estado}'`,
+        pedido: res.pedido,
+      };
+    }, {
+      body: t.Object({
+        pedido_id: t.Number(),
+        estado: t.String(),
+      })
+    })
+
+    // Endpoint para historial de entregas completadas del repartidor
+    .get("/repartidor/historial", async ({ query, headers, jwt, set }) => {
+      const authHeader = headers["authorization"];
+      const token = authHeader.split(" ")[1];
+      const payload = await jwt.verify(token);
+
+      if (!payload || (payload.rol !== "repartidor" && payload.rol !== "administrador")) {
+        set.status = 403;
+        return { status: "error", message: "Se requieren permisos de repartidor" };
+      }
+
+      const res = await service.obtenerHistorialEntregasRepartidor(payload.id, query.page, query.limit);
+      return { status: "success", ...res };
+    })
+
     // 1. Crear nuevo pedido (cliente / admin)
     .post("/", async ({ body, headers, jwt, set }) => {
       const authHeader = headers["authorization"];
@@ -136,6 +195,8 @@ export const pedidosRoutes = new Elysia({ prefix: "/api/pedidos" })
         notas: body.notas,
         metodo_pago: body.metodo_pago,
         distancia_km: body.distancia_km,
+        comprobante_url: body.comprobante_url,
+        tipo_entrega: body.tipo_entrega,
       });
 
       if (resultado.errorStatus) {
@@ -159,10 +220,43 @@ export const pedidosRoutes = new Elysia({ prefix: "/api/pedidos" })
             notas: t.Optional(t.String()),
           })
         ),
-        direccion_entrega: t.Optional(t.String()),
-        telefono_contacto: t.Optional(t.String()),
-        notas: t.Optional(t.String()),
-        metodo_pago: t.Optional(t.String()),
+        direccion_entrega: t.Optional(t.Union([t.String(), t.Null()])),
+        telefono_contacto: t.Optional(t.Union([t.String(), t.Null()])),
+        notas: t.Optional(t.Union([t.String(), t.Null()])),
+        metodo_pago: t.Optional(t.Union([t.String(), t.Null()])),
+        distancia_km: t.Optional(t.Union([t.Number(), t.Null()])),
+        comprobante_url: t.Optional(t.Union([t.String(), t.Null()])),
+        tipo_entrega: t.Optional(t.Union([t.String(), t.Null()])),
+      })
+    })
+
+    // 1.5 Adjuntar comprobante de transferencia a un pedido existente
+    .patch("/:id/comprobante", async ({ params, body, headers, jwt, set }) => {
+      const id = parseInt(params.id, 10);
+      if (isNaN(id)) {
+        set.status = 400;
+        return { status: "error", message: "ID de pedido invalido" };
+      }
+
+      const authHeader = headers["authorization"];
+      const token = authHeader.split(" ")[1];
+      const payload = await jwt.verify(token);
+
+      const resultado = await service.adjuntarComprobante(id, payload.id, body.comprobante_url);
+
+      if (resultado.errorStatus) {
+        set.status = resultado.errorStatus;
+        return { status: "error", message: resultado.message };
+      }
+
+      return {
+        status: "success",
+        message: "Comprobante de transferencia adjuntado con éxito",
+        pedido: resultado.pedido,
+      };
+    }, {
+      body: t.Object({
+        comprobante_url: t.String(),
       })
     })
 

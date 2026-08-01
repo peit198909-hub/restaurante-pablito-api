@@ -98,6 +98,128 @@ export async function obtenerCategoriasActivas() {
   return result.rows;
 }
 
+// Obtener todas las categorías para administración (incluye conteo de productos)
+export async function obtenerTodasCategoriasAdmin() {
+  const result = await db.execute({
+    sql: `SELECT c.*, 
+                 (SELECT COUNT(*) FROM productos p WHERE p.categoria = c.nombre) as total_productos
+          FROM categorias_productos c
+          ORDER BY c.orden ASC, c.nombre ASC`,
+    args: [],
+  });
+
+  return result.rows || [];
+}
+
+// Crear una nueva categoría
+export async function crearCategoria({ nombre, descripcion = "", orden = 0, activa = 1 }) {
+  if (!nombre || !nombre.trim()) {
+    return { errorStatus: 400, message: "El nombre de la categoría es obligatorio" };
+  }
+
+  const nombreLimpio = nombre.trim();
+
+  // Verificar si ya existe
+  const checkRes = await db.execute({
+    sql: "SELECT id FROM categorias_productos WHERE LOWER(TRIM(nombre)) = LOWER(?) LIMIT 1",
+    args: [nombreLimpio],
+  });
+
+  if (checkRes.rows.length > 0) {
+    return { errorStatus: 409, message: `La categoría "${nombreLimpio}" ya existe` };
+  }
+
+  const ordenNum = parseInt(orden, 10) || 0;
+  const insertRes = await db.execute({
+    sql: `INSERT INTO categorias_productos (nombre, descripcion, orden, activa, creado_en, actualizado_en)
+          VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+          RETURNING *`,
+    args: [nombreLimpio, descripcion ? descripcion.trim() : "", ordenNum, activa ? 1 : 0],
+  });
+
+  return { categoria: insertRes.rows[0] };
+}
+
+// Editar una categoría existente
+export async function editarCategoria(id, { nombre, descripcion, orden, activa }) {
+  const catId = parseInt(id, 10);
+  if (isNaN(catId)) {
+    return { errorStatus: 400, message: "ID de categoría inválido" };
+  }
+
+  const currentRes = await db.execute({
+    sql: "SELECT * FROM categorias_productos WHERE id = ? LIMIT 1",
+    args: [catId],
+  });
+
+  const catActual = currentRes.rows[0];
+  if (!catActual) {
+    return { errorStatus: 404, message: "Categoría no encontrada" };
+  }
+
+  const nombreLimpio = nombre ? nombre.trim() : catActual.nombre;
+
+  // Si cambia de nombre, actualizar el nombre en los productos existentes que tengan esa categoría
+  if (nombreLimpio !== catActual.nombre) {
+    await db.execute({
+      sql: "UPDATE productos SET categoria = ? WHERE categoria = ?",
+      args: [nombreLimpio, catActual.nombre],
+    });
+  }
+
+  const descLimpia = descripcion !== undefined ? (descripcion ? descripcion.trim() : "") : catActual.descripcion;
+  const ordenNum = orden !== undefined ? parseInt(orden, 10) : catActual.orden;
+  const activaState = activa !== undefined ? (activa ? 1 : 0) : catActual.activa;
+
+  const updateRes = await db.execute({
+    sql: `UPDATE categorias_productos 
+          SET nombre = ?, descripcion = ?, orden = ?, activa = ?, actualizado_en = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+          WHERE id = ? RETURNING *`,
+    args: [nombreLimpio, descLimpia, ordenNum, activaState, catId],
+  });
+
+  return { categoria: updateRes.rows[0] };
+}
+
+// Eliminar una categoría
+export async function eliminarCategoria(id) {
+  const catId = parseInt(id, 10);
+  if (isNaN(catId)) {
+    return { errorStatus: 400, message: "ID de categoría inválido" };
+  }
+
+  const checkRes = await db.execute({
+    sql: "SELECT * FROM categorias_productos WHERE id = ? LIMIT 1",
+    args: [catId],
+  });
+
+  const cat = checkRes.rows[0];
+  if (!cat) {
+    return { errorStatus: 404, message: "Categoría no encontrada" };
+  }
+
+  // Verificar si hay productos usando esta categoría
+  const countProd = await db.execute({
+    sql: "SELECT COUNT(*) as total FROM productos WHERE categoria = ?",
+    args: [cat.nombre],
+  });
+
+  const totalProds = Number(countProd.rows[0]?.total || 0);
+  if (totalProds > 0) {
+    return {
+      errorStatus: 409,
+      message: `No se puede eliminar la categoría "${cat.nombre}" porque tiene ${totalProds} producto(s) asignado(s). Reasigna o elimina los productos primero.`,
+    };
+  }
+
+  await db.execute({
+    sql: "DELETE FROM categorias_productos WHERE id = ?",
+    args: [catId],
+  });
+
+  return { status: "success", message: `Categoría "${cat.nombre}" eliminada con éxito` };
+}
+
 // Obtener todos los productos para administrador con paginacion opcional
 export async function obtenerTodosProductosAdmin(page = null, limit = null) {
   const pageNum = parseInt(page, 10);
@@ -151,9 +273,10 @@ export async function obtenerTodosProductosAdmin(page = null, limit = null) {
 }
 
 // Crear un nuevo producto evitando duplicados
-export async function crearProducto({ nombre, descripcion = "", precio, categoria, imagen_url = "", disponible = 1 }) {
+export async function crearProducto({ nombre, descripcion = "", precio, categoria, imagen_url = "", disponible = 1, stock = 50 }) {
   const urlSanitizada = sanitizarImagenUrl(imagen_url, categoria);
   const nombreLimpio = nombre.trim();
+  const stockNum = Math.max(0, parseInt(stock, 10) || 0);
 
   // Prevenir duplicados si ya existe un producto con el mismo nombre y categoria
   const existeRes = await db.execute({
@@ -170,29 +293,36 @@ export async function crearProducto({ nombre, descripcion = "", precio, categori
       categoria,
       imagen_url: urlSanitizada,
       disponible: 1,
+      stock: stockNum,
     });
   }
 
   const result = await db.execute({
-    sql: `INSERT INTO productos (nombre, descripcion, precio, categoria, imagen_url, disponible)
-          VALUES (?, ?, ?, ?, ?, ?)
+    sql: `INSERT INTO productos (nombre, descripcion, precio, categoria, imagen_url, disponible, stock)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
           RETURNING *`,
-    args: [nombreLimpio, descripcion, precio, categoria, urlSanitizada, disponible ? 1 : 0],
+    args: [nombreLimpio, descripcion, precio, categoria, urlSanitizada, disponible ? 1 : 0, stockNum],
   });
   return result.rows[0];
 }
 
 // Editar un producto existente
-export async function editarProducto(id, { nombre, descripcion, precio, categoria, imagen_url, disponible }) {
+export async function editarProducto(id, { nombre, descripcion, precio, categoria, imagen_url, disponible, stock }) {
   const urlSanitizada = sanitizarImagenUrl(imagen_url, categoria);
+  const stockNum = stock !== undefined ? Math.max(0, parseInt(stock, 10) || 0) : undefined;
 
-  const result = await db.execute({
-    sql: `UPDATE productos
-          SET nombre = ?, descripcion = ?, precio = ?, categoria = ?, imagen_url = ?, disponible = ?, actualizado_en = datetime('now')
-          WHERE id = ?
-          RETURNING *`,
-    args: [nombre.trim(), descripcion, precio, categoria, urlSanitizada, disponible ? 1 : 0, id],
-  });
+  let sql = "UPDATE productos SET nombre = ?, descripcion = ?, precio = ?, categoria = ?, imagen_url = ?, disponible = ?";
+  const args = [nombre.trim(), descripcion, precio, categoria, urlSanitizada, disponible ? 1 : 0];
+
+  if (stockNum !== undefined) {
+    sql += ", stock = ?";
+    args.push(stockNum);
+  }
+
+  sql += ", actualizado_en = datetime('now') WHERE id = ? RETURNING *";
+  args.push(id);
+
+  const result = await db.execute({ sql, args });
   return result.rows[0] || null;
 }
 

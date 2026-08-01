@@ -15,7 +15,7 @@ const TRANSICIONES_PERMITIDAS = {
 };
 
 // 1. Crear un pedido con calculo estricto del servidor y validaciones
-export async function crearPedido({ usuario_id, items, direccion_entrega, telefono_contacto, notas, metodo_pago, distancia_km = 0 }) {
+export async function crearPedido({ usuario_id, items, direccion_entrega, telefono_contacto, notas, metodo_pago, distancia_km = 0, comprobante_url = null, tipo_entrega = "delivery" }) {
   // 0. Validar horario de atención del restaurante
   const config = await obtenerConfiguracion();
   if (!estaAbierto(config)) {
@@ -29,11 +29,13 @@ export async function crearPedido({ usuario_id, items, direccion_entrega, telefo
     return { errorStatus: 400, message: "El carrito de compras no puede estar vacio" };
   }
 
+  const tipoEntregaFinal = (tipo_entrega === "retiro" || (direccion_entrega && direccion_entrega.toLowerCase().includes("retiro"))) ? "retiro" : "delivery";
+
   // 1. Validar cada item y obtener precio real de la BD
   const itemsProcesados = [];
   for (const item of items) {
     const prodRes = await db.execute({
-      sql: "SELECT id, nombre, precio, disponible FROM productos WHERE id = ? LIMIT 1",
+      sql: "SELECT id, nombre, precio, disponible, stock FROM productos WHERE id = ? LIMIT 1",
       args: [item.producto_id],
     });
     
@@ -49,6 +51,16 @@ export async function crearPedido({ usuario_id, items, direccion_entrega, telefo
     const cantidad = parseInt(item.cantidad, 10);
     if (isNaN(cantidad) || cantidad <= 0) {
       return { errorStatus: 422, message: `La cantidad para "${producto.nombre}" debe ser mayor a 0` };
+    }
+
+    const stockDisponible = producto.stock !== undefined ? parseInt(producto.stock, 10) : 50;
+    if (stockDisponible < cantidad) {
+      return {
+        errorStatus: 422,
+        message: stockDisponible <= 0
+          ? `El producto "${producto.nombre}" está agotado.`
+          : `No hay suficiente stock para "${producto.nombre}". Solo quedan ${stockDisponible} unidades disponibles.`
+      };
     }
 
     const precioUnitario = parseFloat(producto.precio);
@@ -80,8 +92,14 @@ export async function crearPedido({ usuario_id, items, direccion_entrega, telefo
     }
   }
 
-  if (!direccionFinal) {
-    return { errorStatus: 422, message: "Debe proporcionar una direccion de entrega para el pedido" };
+  if (tipoEntregaFinal === "retiro") {
+    if (!direccionFinal) {
+      direccionFinal = "Retiro en el local — Restaurante Pablito";
+    }
+  } else {
+    if (!direccionFinal) {
+      return { errorStatus: 422, message: "Debe proporcionar una dirección de entrega para el pedido a domicilio" };
+    }
   }
 
   // 3. Recalcular totales en el servidor
@@ -89,27 +107,31 @@ export async function crearPedido({ usuario_id, items, direccion_entrega, telefo
     itemsProcesados.map((i) => ({ precio: i.precio_unitario, cantidad: i.cantidad }))
   );
 
-  // 4. Calcular costo de envío por distancia (KM)
-  const distKm = Math.max(0, parseFloat(distancia_km || 0));
+  // 4. Calcular costo de envío ($0.00 en retiro, por KM en delivery)
+  let distKm = 0;
   let costoEnvio = 0;
-  if (distKm > 0) {
-    if (distKm > config.distancia_maxima_km) {
-      return {
-        errorStatus: 422,
-        message: `La distancia de envío (${distKm} km) supera el límite máximo del local (${config.distancia_maxima_km} km).`,
-      };
+
+  if (tipoEntregaFinal === "delivery") {
+    distKm = Math.max(0, parseFloat(distancia_km || 0));
+    if (distKm > 0) {
+      if (distKm > config.distancia_maxima_km) {
+        return {
+          errorStatus: 422,
+          message: `La distancia de envío (${distKm} km) supera el límite máximo del local (${config.distancia_maxima_km} km).`,
+        };
+      }
+      costoEnvio = Math.round((config.costo_base_envio + (distKm * config.precio_por_km)) * 100) / 100;
     }
-    costoEnvio = Math.round((config.costo_base_envio + (distKm * config.precio_por_km)) * 100) / 100;
   }
 
   const totalFinal = Math.round((totales.subtotal + totales.impuesto + costoEnvio) * 100) / 100;
   const metodoPagoFinal = ["efectivo", "transferencia", "otro"].includes(metodo_pago) ? metodo_pago : "efectivo";
+  const comprobanteUrlFinal = (metodoPagoFinal === "transferencia" && comprobante_url) ? comprobante_url : null;
 
   // 5. Insercion en base de datos
-  // Insertar encabezado de pedido con costo_envio y distancia_km
   const insertPedidoRes = await db.execute({
-    sql: `INSERT INTO pedidos (usuario_id, direccion_entrega, telefono_contacto, notas, estado, subtotal, impuesto, costo_envio, distancia_km, total, metodo_pago, creado_en)
-          VALUES (?, ?, ?, ?, 'pendiente', ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    sql: `INSERT INTO pedidos (usuario_id, direccion_entrega, telefono_contacto, notas, estado, subtotal, impuesto, costo_envio, distancia_km, total, metodo_pago, comprobante_url, tipo_entrega, creado_en)
+          VALUES (?, ?, ?, ?, 'pendiente', ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
           RETURNING *`,
     args: [
       usuario_id,
@@ -122,6 +144,8 @@ export async function crearPedido({ usuario_id, items, direccion_entrega, telefo
       distKm,
       totalFinal,
       metodoPagoFinal,
+      comprobanteUrlFinal,
+      tipoEntregaFinal,
     ],
   });
 
@@ -142,18 +166,39 @@ export async function crearPedido({ usuario_id, items, direccion_entrega, telefo
     });
   }
 
+  // Descontar el stock de los productos comprados
+  for (const item of itemsProcesados) {
+    await db.execute({
+      sql: "UPDATE productos SET stock = MAX(0, stock - ?) WHERE id = ?",
+      args: [item.cantidad, item.producto_id],
+    });
+  }
+
+  // Si la entrega es a domicilio, intentar asignación automática dinámica a repartidor
+  if (tipoEntregaFinal === "delivery") {
+    await buscarYAsignarRepartidorDisponible(nuevoPedido.id);
+  }
+
+  // Obtener el pedido actualizado con repartidor_id si fue asignado
+  const pedidoActualizadoRes = await db.execute({
+    sql: "SELECT * FROM pedidos WHERE id = ? LIMIT 1",
+    args: [nuevoPedido.id],
+  });
+  const pedidoFinal = pedidoActualizadoRes.rows[0] || nuevoPedido;
+
   // Emitir evento SSE de creacion de pedido
   orderEvents.emit("pedido_actualizado", {
     tipo: "creado",
-    pedido_id: nuevoPedido.id,
-    usuario_id: nuevoPedido.usuario_id,
-    estado: nuevoPedido.estado,
-    total: nuevoPedido.total,
-    pedido: nuevoPedido,
+    pedido_id: pedidoFinal.id,
+    usuario_id: pedidoFinal.usuario_id,
+    estado: pedidoFinal.estado,
+    total: pedidoFinal.total,
+    repartidor_id: pedidoFinal.repartidor_id,
+    pedido: pedidoFinal,
   });
 
   return {
-    pedido: nuevoPedido,
+    pedido: pedidoFinal,
     items: detallesGuardados,
   };
 }
@@ -210,9 +255,15 @@ export async function obtenerPedidosCliente(usuario_id, page = null, limit = nul
 // 3. Obtener detalle de pedido por ID con verificacion de propietario o admin
 export async function obtenerDetallePedido(pedido_id, usuario_id, esAdmin = false) {
   const pedRes = await db.execute({
-    sql: `SELECT p.*, u.nombre as cliente_nombre, u.apellido as cliente_apellido, u.correo as cliente_correo
+    sql: `SELECT p.*, 
+                 u.nombre as cliente_nombre, 
+                 u.apellido as cliente_apellido, 
+                 u.correo as cliente_correo,
+                 rep.nombre as repartidor_nombre,
+                 rep.apellido as repartidor_apellido
           FROM pedidos p
           JOIN usuarios u ON p.usuario_id = u.id
+          LEFT JOIN usuarios rep ON p.repartidor_id = rep.id
           WHERE p.id = ? LIMIT 1`,
     args: [pedido_id],
   });
@@ -274,9 +325,12 @@ export async function obtenerTodosPedidosAdmin(estado = null, fecha = null, page
                     u.nombre as cliente_nombre, 
                     u.apellido as cliente_apellido, 
                     u.correo as cliente_correo,
+                    rep.nombre as repartidor_nombre,
+                    rep.apellido as repartidor_apellido,
                     (SELECT COUNT(*) FROM detalles_pedidos dp WHERE dp.pedido_id = p.id) as total_items
              FROM pedidos p
              JOIN usuarios u ON p.usuario_id = u.id
+             LEFT JOIN usuarios rep ON p.repartidor_id = rep.id
              ${whereSql}
              ORDER BY p.creado_en DESC`;
 
@@ -347,6 +401,20 @@ export async function cambiarEstadoPedido(pedido_id, nuevoEstado) {
 
   const pedidoActualizado = upRes.rows[0];
 
+  // Si el pedido fue cancelado, devolver automáticamente el stock a los productos
+  if (nuevoEstado === "cancelado" && estadoActual !== "cancelado") {
+    const itemsRes = await db.execute({
+      sql: "SELECT producto_id, cantidad FROM detalles_pedidos WHERE pedido_id = ?",
+      args: [pedido_id],
+    });
+    for (const item of itemsRes.rows || []) {
+      await db.execute({
+        sql: "UPDATE productos SET stock = stock + ? WHERE id = ?",
+        args: [item.cantidad, item.producto_id],
+      });
+    }
+  }
+
   // Emitir evento SSE de cambio de estado de pedido
   orderEvents.emit("pedido_actualizado", {
     tipo: "actualizado",
@@ -404,4 +472,220 @@ export async function obtenerMetricasDashboard() {
     ticketPromedio: Number(ticketPromedio),
     topProductos: topRes.rows || [],
   };
+}
+
+// 7. Adjuntar comprobante de transferencia a un pedido existente
+export async function adjuntarComprobante(pedidoId, usuarioId, comprobanteUrl) {
+  // Verificar que el pedido existe y pertenece al usuario
+  const pedidoRes = await db.execute({
+    sql: "SELECT id, usuario_id, metodo_pago, estado FROM pedidos WHERE id = ? LIMIT 1",
+    args: [pedidoId],
+  });
+
+  const pedido = pedidoRes.rows[0];
+  if (!pedido) {
+    return { errorStatus: 404, message: "Pedido no encontrado" };
+  }
+
+  if (pedido.usuario_id !== usuarioId) {
+    return { errorStatus: 403, message: "No tiene permisos para modificar este pedido" };
+  }
+
+  if (pedido.metodo_pago !== "transferencia") {
+    return { errorStatus: 422, message: "Solo se pueden adjuntar comprobantes a pedidos con método de pago 'transferencia'" };
+  }
+
+  // Actualizar el comprobante_url del pedido
+  const updateRes = await db.execute({
+    sql: "UPDATE pedidos SET comprobante_url = ? WHERE id = ? RETURNING *",
+    args: [comprobanteUrl, pedidoId],
+  });
+
+  return {
+    pedido: updateRes.rows[0],
+  };
+}
+
+/**
+ * Busca un repartidor activo disponible (sin pedido activo en curso)
+ * y le asigna el pedido.
+ * Si todos están ocupados, el pedido permanece sin asignar (repartidor_id = NULL).
+ */
+export async function buscarYAsignarRepartidorDisponible(pedidoId) {
+  try {
+    const repsRes = await db.execute(
+      "SELECT id, nombre, apellido FROM usuarios WHERE rol = 'repartidor' AND activo = 1"
+    );
+    const repartidores = repsRes.rows || [];
+    if (repartidores.length === 0) return null;
+
+    const libres = [];
+    for (const rep of repartidores) {
+      const activeRes = await db.execute({
+        sql: `SELECT COUNT(*) as count FROM pedidos 
+              WHERE repartidor_id = ? AND estado IN ('pendiente', 'confirmado', 'en_preparacion', 'listo', 'en_camino')`,
+        args: [rep.id],
+      });
+      const activeCount = Number(activeRes.rows[0]?.count || 0);
+      if (activeCount === 0) {
+        libres.push(rep);
+      }
+    }
+
+    if (libres.length > 0) {
+      const seleccionado = libres[Math.floor(Math.random() * libres.length)];
+      await db.execute({
+        sql: "UPDATE pedidos SET repartidor_id = ? WHERE id = ?",
+        args: [seleccionado.id, pedidoId],
+      });
+      console.log(`🤖 Asignación automática: Pedido #${pedidoId} asignado a repartidor ${seleccionado.nombre} ${seleccionado.apellido} (ID: ${seleccionado.id})`);
+      return seleccionado;
+    }
+  } catch (err) {
+    console.error("Error en asignación automática de repartidor:", err);
+  }
+  return null;
+}
+
+/**
+ * Busca el pedido sin repartidor más antiguo que esté en cola y se lo asigna
+ * al repartidor especificado cuando completa su entrega actual.
+ */
+export async function procesarSiguientePedidoEnCola(repartidorId) {
+  try {
+    const pendingRes = await db.execute({
+      sql: `SELECT id FROM pedidos 
+            WHERE repartidor_id IS NULL AND (tipo_entrega = 'delivery' OR tipo_entrega IS NULL) AND estado IN ('pendiente', 'confirmado', 'en_preparacion', 'listo') 
+            ORDER BY id ASC LIMIT 1`,
+    });
+
+    const siguientePedido = pendingRes.rows[0];
+    if (siguientePedido) {
+      await db.execute({
+        sql: "UPDATE pedidos SET repartidor_id = ? WHERE id = ?",
+        args: [repartidorId, siguientePedido.id],
+      });
+
+      console.log(`🤖 Cola de pedidos: Pedido #${siguientePedido.id} asignado automáticamente al repartidor ID: ${repartidorId}`);
+
+      orderEvents.emit("pedido_actualizado", {
+        tipo: "asignado",
+        pedido_id: siguientePedido.id,
+        repartidor_id: repartidorId,
+      });
+
+      return siguientePedido.id;
+    }
+  } catch (err) {
+    console.error("Error procesando cola de pedidos para repartidor:", err);
+  }
+  return null;
+}
+
+/**
+ * Obtener la entrega activa asignada a un repartidor (repartidor_id)
+ */
+export async function obtenerEntregaActivaRepartidor(repartidorId) {
+  const res = await db.execute({
+    sql: `SELECT p.*, u.nombre as cliente_nombre, u.apellido as cliente_apellido, u.correo as cliente_correo, u.telefono as cliente_telefono
+          FROM pedidos p
+          LEFT JOIN usuarios u ON p.usuario_id = u.id
+          WHERE p.repartidor_id = ? AND p.estado IN ('pendiente', 'confirmado', 'en_preparacion', 'listo', 'en_camino')
+          ORDER BY p.id ASC LIMIT 1`,
+    args: [repartidorId],
+  });
+
+  const pedido = res.rows[0];
+  if (!pedido) return null;
+
+  const itemsRes = await db.execute({
+    sql: `SELECT dp.*, pr.nombre as producto_nombre, pr.imagen_url as producto_imagen
+          FROM detalles_pedidos dp
+          JOIN productos pr ON dp.producto_id = pr.id
+          WHERE dp.pedido_id = ?`,
+    args: [pedido.id],
+  });
+
+  return {
+    pedido,
+    items: itemsRes.rows || [],
+  };
+}
+
+/**
+ * Obtener historial de entregas completadas por un repartidor
+ */
+export async function obtenerHistorialEntregasRepartidor(repartidorId, page = 1, limit = 10) {
+  const pageNum = parseInt(page, 10) || 1;
+  const limitNum = parseInt(limit, 10) || 10;
+  const offset = (pageNum - 1) * limitNum;
+
+  const countRes = await db.execute({
+    sql: "SELECT COUNT(*) as total FROM pedidos WHERE repartidor_id = ? AND estado = 'entregado'",
+    args: [repartidorId],
+  });
+  const total = parseInt(countRes.rows[0]?.total || 0, 10);
+
+  const res = await db.execute({
+    sql: `SELECT p.*, u.nombre as cliente_nombre, u.apellido as cliente_apellido
+          FROM pedidos p
+          LEFT JOIN usuarios u ON p.usuario_id = u.id
+          WHERE p.repartidor_id = ? AND p.estado = 'entregado'
+          ORDER BY p.actualizado_en DESC LIMIT ? OFFSET ?`,
+    args: [repartidorId, limitNum, offset],
+  });
+
+  return {
+    entregas: res.rows || [],
+    total,
+    page: pageNum,
+    limit: limitNum,
+    totalPages: Math.ceil(total / limitNum) || 1,
+  };
+}
+
+/**
+ * Cambiar el estado de un pedido por parte del repartidor asignado (en_camino o entregado)
+ */
+export async function cambiarEstadoPorRepartidor(pedidoId, repartidorId, nuevoEstado) {
+  if (!["en_camino", "entregado"].includes(nuevoEstado)) {
+    return { errorStatus: 400, message: "El repartidor solo puede cambiar el estado a 'en_camino' o 'entregado'" };
+  }
+
+  const checkRes = await db.execute({
+    sql: "SELECT id, estado, repartidor_id FROM pedidos WHERE id = ? LIMIT 1",
+    args: [pedidoId],
+  });
+
+  const pedido = checkRes.rows[0];
+  if (!pedido) {
+    return { errorStatus: 404, message: "Pedido no encontrado" };
+  }
+
+  if (Number(pedido.repartidor_id) !== Number(repartidorId)) {
+    return { errorStatus: 403, message: "Este pedido no está asignado a tu cuenta" };
+  }
+
+  const updateRes = await db.execute({
+    sql: `UPDATE pedidos SET estado = ?, actualizado_en = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ? RETURNING *`,
+    args: [nuevoEstado, pedidoId],
+  });
+
+  const pedidoActualizado = updateRes.rows[0];
+
+  // Si se marcó como entregado, el repartidor queda libre → procesar automáticamente el siguiente pedido de la cola
+  if (nuevoEstado === "entregado") {
+    await procesarSiguientePedidoEnCola(repartidorId);
+  }
+
+  orderEvents.emit("pedido_actualizado", {
+    tipo: "estado_cambiado",
+    pedido_id: pedidoId,
+    usuario_id: pedidoActualizado.usuario_id,
+    repartidor_id: repartidorId,
+    estado: nuevoEstado,
+    pedido: pedidoActualizado,
+  });
+
+  return { pedido: pedidoActualizado };
 }

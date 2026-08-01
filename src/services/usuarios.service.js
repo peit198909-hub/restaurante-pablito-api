@@ -97,3 +97,25 @@ export async function crearAdministrador({ nombre, apellido, correo, contrasena,
   
   return result.rows[0];
 }
+
+// Crea un nuevo repartidor (para inicio de sesión de delivery)
+export async function crearRepartidor({ nombre, apellido, correo, contrasena, telefono = null, direccion = null }) {
+  const contrasenaHash = await Bun.password.hash(contrasena);
+  
+  const result = await db.execute({
+    sql: `INSERT INTO usuarios (nombre, apellido, correo, contrasena_hash, telefono, direccion, rol, activo)
+          VALUES (?, ?, ?, ?, ?, ?, 'repartidor', 1)
+          RETURNING id, nombre, apellido, correo, telefono, direccion, rol, activo, creado_en, actualizado_en`,
+    args: [nombre, apellido, correo, contrasenaHash, telefono, direccion],
+  });
+  
+  return result.rows[0];
+}
+
+// Obtener todos los repartidores activos
+export async function obtenerRepartidoresActivos() {
+  const result = await db.execute({
+    sql: `SELECT id, nombre, apellido, correo, telefono, direccion, rol, activo, creado_en FROM usuarios WHERE rol = 'repartidor' AND activo = 1 ORDER BY nombre ASC`,
+  });
+  return result.rows || [];
+}

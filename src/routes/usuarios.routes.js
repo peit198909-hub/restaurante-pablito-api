@@ -227,5 +227,49 @@ export const usuariosRoutes = new Elysia({ prefix: "/api/usuarios" })
           direccion: t.Optional(t.String()),
         })
       })
+
+      // 6. Crear cuenta de repartidor (solo admin)
+      .post("/repartidor/crear", async ({ body, headers, jwt, request, set }) => {
+        const authHeader = headers["authorization"];
+        const token = authHeader.split(" ")[1];
+        const payload = await jwt.verify(token);
+        const ip = request.headers.get("x-forwarded-for") || "127.0.0.1";
+        
+        const existente = await service.buscarUsuarioPorCorreo(body.correo);
+        if (existente) {
+          set.status = 409;
+          return { status: "error", message: "El correo electrónico ya está registrado" };
+        }
+        
+        const nuevoRepartidor = await service.crearRepartidor(body);
+        
+        await logActividad(
+          nuevoRepartidor.id,
+          "CREAR_REPARTIDOR",
+          `Cuenta de repartidor creada por admin ID ${payload.id}`,
+          ip
+        );
+        
+        return {
+          status: "success",
+          message: "Cuenta de repartidor creada con éxito",
+          usuario: nuevoRepartidor,
+        };
+      }, {
+        body: t.Object({
+          nombre: t.String({ minLength: 2 }),
+          apellido: t.String({ minLength: 2 }),
+          correo: t.String(),
+          contrasena: t.String({ minLength: 6 }),
+          telefono: t.Optional(t.String()),
+          direccion: t.Optional(t.String()),
+        })
+      })
+
+      // 7. Listar todos los repartidores activos (solo admin)
+      .get("/repartidores/lista", async () => {
+        const repartidores = await service.obtenerRepartidoresActivos();
+        return { status: "success", repartidores };
+      })
     )
   );
