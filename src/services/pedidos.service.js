@@ -15,7 +15,7 @@ const TRANSICIONES_PERMITIDAS = {
 };
 
 // 1. Crear un pedido con calculo estricto del servidor y validaciones
-export async function crearPedido({ usuario_id, items, direccion_entrega, telefono_contacto, notas, metodo_pago, distancia_km = 0, comprobante_url = null, tipo_entrega = "delivery" }) {
+export async function crearPedido({ usuario_id, items, direccion_entrega, telefono_contacto, notas, metodo_pago, distancia_km = 0, comprobante_url = null, tipo_entrega = "delivery", estado_inicial = "pendiente" }) {
   // 0. Validar horario de atención del restaurante
   const config = await obtenerConfiguracion();
   if (!estaAbierto(config)) {
@@ -128,16 +128,19 @@ export async function crearPedido({ usuario_id, items, direccion_entrega, telefo
   const metodoPagoFinal = ["efectivo", "transferencia", "otro"].includes(metodo_pago) ? metodo_pago : "efectivo";
   const comprobanteUrlFinal = (metodoPagoFinal === "transferencia" && comprobante_url) ? comprobante_url : null;
 
+  const estadoPermitido = ["pendiente", "confirmado", "en_preparacion", "listo", "entregado"].includes(estado_inicial) ? estado_inicial : "pendiente";
+
   // 5. Insercion en base de datos
   const insertPedidoRes = await db.execute({
     sql: `INSERT INTO pedidos (usuario_id, direccion_entrega, telefono_contacto, notas, estado, subtotal, impuesto, costo_envio, distancia_km, total, metodo_pago, comprobante_url, tipo_entrega, creado_en)
-          VALUES (?, ?, ?, ?, 'pendiente', ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
           RETURNING *`,
     args: [
       usuario_id,
       direccionFinal,
       telefonoFinal || null,
       notas || null,
+      estadoPermitido,
       totales.subtotal,
       totales.impuesto,
       costoEnvio,
@@ -302,6 +305,20 @@ export async function obtenerDetallePedido(pedido_id, usuario_id, esAdmin = fals
 
 // 4. Obtener todos los pedidos para administrador (con filtros y paginacion)
 export async function obtenerTodosPedidosAdmin(estado = null, fecha = null, page = null, limit = null) {
+  // Auto-asignación de seguridad: Asignar cualquier pedido de delivery pendiente a repartidores activos
+  try {
+    const unassignedRes = await db.execute(
+      "SELECT id FROM pedidos WHERE repartidor_id IS NULL AND (tipo_entrega = 'delivery' OR tipo_entrega IS NULL OR direccion_entrega NOT LIKE '%Retiro%') AND estado != 'cancelado'"
+    );
+    if (unassignedRes.rows && unassignedRes.rows.length > 0) {
+      for (const row of unassignedRes.rows) {
+        await buscarYAsignarRepartidorDisponible(row.id);
+      }
+    }
+  } catch (err) {
+    // Ignorar si no hay tabla
+  }
+
   let whereSql = " WHERE 1=1";
   const args = [];
 
@@ -415,11 +432,12 @@ export async function cambiarEstadoPedido(pedido_id, nuevoEstado) {
     }
   }
 
-  // Emitir evento SSE de cambio de estado de pedido
+  // Emitir evento SSE / Ably de cambio de estado de pedido
   orderEvents.emit("pedido_actualizado", {
     tipo: "actualizado",
     pedido_id: pedidoActualizado.id,
     usuario_id: pedidoActualizado.usuario_id,
+    repartidor_id: pedidoActualizado.repartidor_id,
     estado: pedidoActualizado.estado,
     pedido: pedidoActualizado,
   });
@@ -513,13 +531,15 @@ export async function adjuntarComprobante(pedidoId, usuarioId, comprobanteUrl) {
  */
 export async function buscarYAsignarRepartidorDisponible(pedidoId) {
   try {
+    // 1. Obtener todos los repartidores activos del sistema
     const repsRes = await db.execute(
-      "SELECT id, nombre, apellido FROM usuarios WHERE rol = 'repartidor' AND activo = 1"
+      "SELECT id, nombre, apellido FROM usuarios WHERE rol = 'repartidor' AND activo = 1 ORDER BY id ASC"
     );
     const repartidores = repsRes.rows || [];
     if (repartidores.length === 0) return null;
 
-    const libres = [];
+    // 2. Calcular la carga de trabajo activa (pedidos sin entregar) de cada repartidor
+    const repartidoresConCarga = [];
     for (const rep of repartidores) {
       const activeRes = await db.execute({
         sql: `SELECT COUNT(*) as count FROM pedidos 
@@ -527,22 +547,44 @@ export async function buscarYAsignarRepartidorDisponible(pedidoId) {
         args: [rep.id],
       });
       const activeCount = Number(activeRes.rows[0]?.count || 0);
-      if (activeCount === 0) {
-        libres.push(rep);
-      }
+      repartidoresConCarga.push({ ...rep, activeCount });
     }
 
-    if (libres.length > 0) {
-      const seleccionado = libres[Math.floor(Math.random() * libres.length)];
+    // 3. Ordenar repartidores por menor carga de trabajo activa
+    repartidoresConCarga.sort((a, b) => a.activeCount - b.activeCount);
+
+    const minCarga = repartidoresConCarga[0].activeCount;
+    const candidatos = repartidoresConCarga.filter((r) => r.activeCount === minCarga);
+    const seleccionado = candidatos[Math.floor(Math.random() * candidatos.length)];
+
+    if (seleccionado) {
       await db.execute({
         sql: "UPDATE pedidos SET repartidor_id = ? WHERE id = ?",
         args: [seleccionado.id, pedidoId],
       });
-      console.log(`🤖 Asignación automática: Pedido #${pedidoId} asignado a repartidor ${seleccionado.nombre} ${seleccionado.apellido} (ID: ${seleccionado.id})`);
+
+      console.log(
+        `🤖 Asignación inteligente: Pedido #${pedidoId} asignado a repartidor ${seleccionado.nombre} ${seleccionado.apellido} (ID: ${seleccionado.id}, Carga activa: ${seleccionado.activeCount})`
+      );
+
+      const pedQuery = await db.execute({
+        sql: "SELECT usuario_id, estado FROM pedidos WHERE id = ? LIMIT 1",
+        args: [pedidoId],
+      });
+      const pedData = pedQuery.rows[0] || {};
+
+      orderEvents.emit("pedido_actualizado", {
+        tipo: "asignado",
+        pedido_id: pedidoId,
+        usuario_id: pedData.usuario_id,
+        repartidor_id: seleccionado.id,
+        estado: pedData.estado || "pendiente",
+      });
+
       return seleccionado;
     }
   } catch (err) {
-    console.error("Error en asignación automática de repartidor:", err);
+    console.error("Error en asignación inteligente de repartidor:", err);
   }
   return null;
 }
@@ -591,24 +633,32 @@ export async function obtenerEntregaActivaRepartidor(repartidorId) {
           FROM pedidos p
           LEFT JOIN usuarios u ON p.usuario_id = u.id
           WHERE p.repartidor_id = ? AND p.estado IN ('pendiente', 'confirmado', 'en_preparacion', 'listo', 'en_camino')
-          ORDER BY p.id ASC LIMIT 1`,
+          ORDER BY p.id ASC`,
     args: [repartidorId],
   });
 
-  const pedido = res.rows[0];
-  if (!pedido) return null;
+  const pedidos = res.rows || [];
+  if (pedidos.length === 0) return null;
 
-  const itemsRes = await db.execute({
-    sql: `SELECT dp.*, pr.nombre as producto_nombre, pr.imagen_url as producto_imagen
-          FROM detalles_pedidos dp
-          JOIN productos pr ON dp.producto_id = pr.id
-          WHERE dp.pedido_id = ?`,
-    args: [pedido.id],
-  });
+  const entregas = [];
+  for (const ped of pedidos) {
+    const itemsRes = await db.execute({
+      sql: `SELECT dp.*, pr.nombre as producto_nombre, pr.imagen_url as producto_imagen
+            FROM detalles_pedidos dp
+            JOIN productos pr ON dp.producto_id = pr.id
+            WHERE dp.pedido_id = ?`,
+      args: [ped.id],
+    });
+    entregas.push({
+      pedido: ped,
+      items: itemsRes.rows || [],
+    });
+  }
 
   return {
-    pedido,
-    items: itemsRes.rows || [],
+    pedido: entregas[0].pedido,
+    items: entregas[0].items,
+    entregas,
   };
 }
 

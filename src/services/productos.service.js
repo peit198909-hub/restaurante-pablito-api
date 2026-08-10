@@ -32,28 +32,62 @@ export function sanitizarImagenUrl(url, categoria = "Platos Principales") {
   return FOTOS_DEFAULT[categoria] || FOTOS_DEFAULT["Platos Principales"];
 }
 
-// Obtener productos activos para clientes (disponible = 1)
-export async function obtenerProductosActivos(categoria = null, busqueda = null) {
-  let sql = "SELECT * FROM productos WHERE disponible = 1";
+// Obtener productos activos para clientes (disponible = 1) con soporte de paginación
+export async function obtenerProductosActivos(categoria = null, busqueda = null, page = null, limit = null) {
+  let whereSql = " WHERE disponible = 1";
   const args = [];
 
   if (categoria) {
-    sql += " AND categoria = ?";
+    whereSql += " AND categoria = ?";
     args.push(categoria);
   }
 
   if (busqueda) {
-    sql += " AND (nombre LIKE ? OR descripcion LIKE ?)";
+    whereSql += " AND (nombre LIKE ? OR descripcion LIKE ?)";
     args.push(`%${busqueda}%`, `%${busqueda}%`);
   }
 
-  sql += " ORDER BY categoria ASC, nombre ASC";
+  const countRes = await db.execute({
+    sql: `SELECT COUNT(*) as total FROM productos ${whereSql}`,
+    args,
+  });
+  const total = parseInt(countRes.rows[0]?.total || 0, 10);
+
+  let sql = `SELECT * FROM productos ${whereSql} ORDER BY categoria ASC, nombre ASC`;
+
+  const pageNum = parseInt(page, 10);
+  const limitNum = parseInt(limit, 10);
+
+  if (pageNum > 0 && limitNum > 0) {
+    const offset = (pageNum - 1) * limitNum;
+    sql += " LIMIT ? OFFSET ?";
+    const pageArgs = [...args, limitNum, offset];
+    const result = await db.execute({ sql, args: pageArgs });
+    const productos = result.rows.map((p) => ({
+      ...p,
+      imagen_url: sanitizarImagenUrl(p.imagen_url, p.categoria),
+    }));
+    return {
+      productos,
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(total / limitNum) || 1,
+    };
+  }
 
   const result = await db.execute({ sql, args });
-  return result.rows.map((p) => ({
+  const productos = result.rows.map((p) => ({
     ...p,
     imagen_url: sanitizarImagenUrl(p.imagen_url, p.categoria),
   }));
+  return {
+    productos,
+    total,
+    page: 1,
+    limit: total,
+    totalPages: 1,
+  };
 }
 
 // Obtener producto por ID (solo disponible para cliente, o cualquiera para admin)

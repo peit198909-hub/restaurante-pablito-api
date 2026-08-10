@@ -573,118 +573,45 @@ VALUES
 ON CONFLICT(telefono_whatsapp) DO NOTHING;
 
 -- ============================================================
--- FIN DEL ESQUEMA
+-- 11. TABLA: LOGS (Auditoría de acciones de usuarios y sistema)
 -- ============================================================
-
-
--- ============================================================
--- 10. TABLA: REPARTIDORES_DELIVERY (Gestión de Repartidores y Envío por WhatsApp)
--- ============================================================
-CREATE TABLE IF NOT EXISTS repartidores_delivery (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-
-    -- Nombre y Apellido del repartidor / motorizado
-    nombre          TEXT    NOT NULL,
-    apellido        TEXT    NOT NULL,
-
-    -- Número de teléfono en formato internacional (ej: '593991234567')
-    -- utilizado para enviar el mensaje con los detalles del pedido por WhatsApp
-    telefono_whatsapp TEXT  NOT NULL UNIQUE,
-
-    -- Vehículo del repartidor: 'moto', 'bicicleta', 'auto', 'a_pie'
-    tipo_vehiculo   TEXT    NOT NULL DEFAULT 'moto'
-                    CHECK (tipo_vehiculo IN ('moto', 'bicicleta', 'auto', 'a_pie')),
-
-    -- Placa o identificación del vehículo (opcional)
-    placa_vehiculo  TEXT,
-
-    -- Estado de disponibilidad del repartidor (1 = Disponible / Activo, 0 = Inactivo)
-    activo          INTEGER NOT NULL DEFAULT 1
-                    CHECK (activo IN (0, 1)),
-
-    -- Timestamp de creación y actualización
-    creado_en       TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    actualizado_en  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+CREATE TABLE IF NOT EXISTS logs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    id_usuario   INTEGER REFERENCES usuarios(id),
+    accion       TEXT NOT NULL,
+    detalle      TEXT,
+    ip           TEXT,
+    creado_en    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Índices para búsqueda rápida
-CREATE INDEX IF NOT EXISTS idx_repartidores_whatsapp ON repartidores_delivery (telefono_whatsapp);
-CREATE INDEX IF NOT EXISTS idx_repartidores_activo ON repartidores_delivery (activo);
-
--- Trigger para actualizar timestamp
-CREATE TRIGGER IF NOT EXISTS trg_repartidores_delivery_actualizado_en
-AFTER UPDATE ON repartidores_delivery
-FOR EACH ROW
-BEGIN
-    UPDATE repartidores_delivery
-    SET actualizado_en = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-    WHERE id = OLD.id;
-END;
-
--- Datos de ejemplo iniciales (Semilla de repartidores de delivery)
-INSERT INTO repartidores_delivery (nombre, apellido, telefono_whatsapp, tipo_vehiculo, placa_vehiculo, activo)
-VALUES 
-    ('Juan', 'Pérez', '593991234567', 'moto', 'PBX-1234', 1),
-    ('Carlos', 'López', '593987654321', 'moto', 'PCY-9876', 1)
-ON CONFLICT(telefono_whatsapp) DO NOTHING;
-
 -- ============================================================
--- 11. TABLA: CONFIGURACION_NEGOCIO (Configuración del Local, Horarios y Delivery)
+-- 12. TABLA: CONFIGURACION_NEGOCIO (Parámetros del restaurante)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS configuracion_negocio (
-    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
-
-    -- Información del local
-    nombre_negocio          TEXT    NOT NULL DEFAULT 'Restaurante Pablito',
-    telefono_contacto       TEXT    DEFAULT '0991234567',
-    direccion_local         TEXT    DEFAULT 'Av. Principal #123, Quito, Ecuador',
-
-    -- Horarios de atención
-    hora_apertura           TEXT    NOT NULL DEFAULT '08:00',
-    hora_cierre             TEXT    NOT NULL DEFAULT '22:00',
-    dias_atencion           TEXT    NOT NULL DEFAULT 'Lunes a Domingo',
-
-    -- Estado manual del local (1 = Abierto / Automático por horario, 0 = Cerrado Forzado)
-    abierto_manual          INTEGER NOT NULL DEFAULT 1 CHECK (abierto_manual IN (0, 1)),
-
-    -- Configuración de envío por delivery
-    costo_base_envio        REAL    NOT NULL DEFAULT 1.50 CHECK (costo_base_envio >= 0),
-    precio_por_km           REAL    NOT NULL DEFAULT 0.50 CHECK (precio_por_km >= 0),
-    distancia_maxima_km     REAL    NOT NULL DEFAULT 15.0 CHECK (distancia_maxima_km > 0),
-
-    -- Coordenadas geográficas del local para cálculo de distancia
-    latitud_restaurante     REAL    NOT NULL DEFAULT -0.180653,
-    longitud_restaurante    REAL    NOT NULL DEFAULT -78.467838,
-
-    -- Timestamps de auditoría
-    creado_en               TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-    actualizado_en          TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    id                    INTEGER PRIMARY KEY DEFAULT 1,
+    nombre_negocio        TEXT NOT NULL DEFAULT 'Restaurante Pablito',
+    telefono_contacto     TEXT NOT NULL DEFAULT '0991234567',
+    direccion_local       TEXT NOT NULL DEFAULT 'Av. Principal #123, Quito, Ecuador',
+    hora_apertura         TEXT NOT NULL DEFAULT '08:00',
+    hora_cierre           TEXT NOT NULL DEFAULT '22:00',
+    dias_atencion         TEXT NOT NULL DEFAULT 'Lunes a Domingo',
+    abierto_manual        INTEGER NOT NULL DEFAULT 1 CHECK (abierto_manual IN (0, 1)),
+    costo_base_envio      REAL NOT NULL DEFAULT 1.50 CHECK (costo_base_envio >= 0),
+    precio_por_km         REAL NOT NULL DEFAULT 0.50 CHECK (precio_por_km >= 0),
+    distancia_maxima_km   REAL NOT NULL DEFAULT 15.0 CHECK (distancia_maxima_km > 0),
+    latitud_restaurante   REAL NOT NULL DEFAULT -0.180653,
+    longitud_restaurante  REAL NOT NULL DEFAULT -78.467838,
+    actualizado_en        TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Trigger para actualizar timestamp en configuracion_negocio
-CREATE TRIGGER IF NOT EXISTS trg_configuracion_negocio_actualizado_en
-AFTER UPDATE ON configuracion_negocio
-FOR EACH ROW
-BEGIN
-    UPDATE configuracion_negocio
-    SET actualizado_en = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-    WHERE id = OLD.id;
-END;
-
--- Datos de ejemplo iniciales (Configuración única del local)
-INSERT INTO configuracion_negocio (
-    id, nombre_negocio, hora_apertura, hora_cierre, dias_atencion,
-    abierto_manual, costo_base_envio, precio_por_km, distancia_maxima_km,
-    latitud_restaurante, longitud_restaurante
-)
-VALUES (
-    1, 'Restaurante Pablito', '08:00', '22:00', 'Lunes a Domingo',
-    1, 1.50, 0.50, 15.0,
-    -0.180653, -78.467838
-)
+INSERT INTO configuracion_negocio (id, nombre_negocio, telefono_contacto, direccion_local, hora_apertura, hora_cierre, dias_atencion, abierto_manual, costo_base_envio, precio_por_km, distancia_maxima_km, latitud_restaurante, longitud_restaurante)
+VALUES (1, 'Restaurante Pablito', '0991234567', 'Av. Principal #123, Quito, Ecuador', '08:00', '22:00', 'Lunes a Domingo', 1, 1.50, 0.50, 15.0, -0.180653, -78.467838)
 ON CONFLICT(id) DO NOTHING;
 
 -- ============================================================
 -- FIN DEL ESQUEMA
 -- ============================================================
+
+
+
 

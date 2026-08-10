@@ -7,37 +7,14 @@ import { pedidosRoutes } from "./routes/pedidos.routes.js";
 import { repartidoresRoutes } from "./routes/repartidores.routes.js";
 import { configuracionRoutes } from "./routes/configuracion.routes.js";
 import { uploadRoutes } from "./routes/upload.routes.js";
-import { migrateConfig } from "./db/migrate_config.js";
-import { migrateCloudinary } from "./db/migrate_cloudinary.js";
-import { migrateRepartidorSystem } from "./db/migrate_repartidor_system.js";
-import { migrateStockSystem } from "./db/migrate_stock_system.js";
-import { migrateTipoEntrega } from "./db/migrate_tipo_entrega.js";
-import { migrateCategorias } from "./db/migrate_categorias.js";
-
-// Ejecutar migraciones de forma segura sin bloquear la inicialización
-migrateConfig().catch((err) => {
-  console.warn("Advertencia al ejecutar migración de configuración:", err);
-});
-migrateCloudinary().catch((err) => {
-  console.warn("Advertencia al ejecutar migración de Cloudinary:", err);
-});
-migrateRepartidorSystem().catch((err) => {
-  console.warn("Advertencia al ejecutar migración de sistema de repartidores:", err);
-});
-migrateStockSystem().catch((err) => {
-  console.warn("Advertencia al ejecutar migración de sistema de stock:", err);
-});
-migrateTipoEntrega().catch((err) => {
-  console.warn("Advertencia al ejecutar migración de tipo de entrega:", err);
-});
-migrateCategorias().catch((err) => {
-  console.warn("Advertencia al ejecutar migración de categorías:", err);
-});
-
 // Leer variables de entorno
 const port = process.env.PORT || 3000;
-const jwtSecret = process.env.JWT_SECRET || "clave_secreta_jwt_temporal";
+const jwtSecret = process.env.JWT_SECRET || "clave_secreta_jwt_restaurante_pablito";
 const jwtExpiry = process.env.JWT_EXPIRY || "24h";
+
+if (!process.env.JWT_SECRET) {
+  console.warn("⚠️ Advertencia: JWT_SECRET no está definida en las variables de entorno. Usando clave por defecto para desarrollo.");
+}
 
 // Inicializar aplicación Elysia
 const app = new Elysia()

@@ -8,12 +8,14 @@ export const productosRoutes = new Elysia({ prefix: "/api" })
     return { status: "success", categorias };
   })
 
-  // 2. Obtener lista de productos activos (publico)
+  // 2. Obtener lista de productos activos (publico) con paginacion opcional
   .get("/productos", async ({ query }) => {
     const categoria = query.categoria || null;
     const busqueda = query.q || null;
-    const productos = await service.obtenerProductosActivos(categoria, busqueda);
-    return { status: "success", productos };
+    const page = query.page || null;
+    const limit = query.limit || null;
+    const res = await service.obtenerProductosActivos(categoria, busqueda, page, limit);
+    return { status: "success", ...res };
   })
 
   // 3. Obtener detalle de un producto disponible (publico)

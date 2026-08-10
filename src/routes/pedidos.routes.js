@@ -3,93 +3,6 @@ import * as service from "../services/pedidos.service.js";
 import { orderEvents } from "../utils/orderEvents.js";
 
 export const pedidosRoutes = new Elysia({ prefix: "/api/pedidos" })
-  // Endpoint de Server-Sent Events (SSE) en tiempo real para seguimiento de pedidos
-  .get("/stream", async ({ query, headers, jwt, set }) => {
-    // Extraer token desde header Authorization o desde parametro de consulta ?token=
-    const authHeader = headers["authorization"];
-    let token = null;
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      token = authHeader.split(" ")[1];
-    } else if (query && query.token) {
-      token = query.token;
-    }
-
-    if (!token) {
-      set.status = 401;
-      return { status: "error", message: "Token no proporcionado para conexion SSE" };
-    }
-
-    const payload = await jwt.verify(token);
-    if (!payload) {
-      set.status = 401;
-      return { status: "error", message: "Token invalido o expirado para conexion SSE" };
-    }
-
-    const usuarioId = payload.id;
-    const esAdmin = payload.rol === "administrador";
-
-    const stream = new ReadableStream({
-      start(controller) {
-        const encoder = new TextEncoder();
-
-        const sendEvent = (event, data) => {
-          try {
-            controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-          } catch (err) {
-            // El stream se ha cerrado
-          }
-        };
-
-        // Enviar handshake inicial
-        sendEvent("conexion", {
-          status: "conectado",
-          message: "Conexión SSE establecida con éxito",
-          usuarioId,
-          esAdmin,
-        });
-
-        // Intervalo de ping/heartbeat cada 15 segundos para mantener viva la conexión HTTP
-        const pingInterval = setInterval(() => {
-          try {
-            controller.enqueue(encoder.encode(": ping\n\n"));
-          } catch (err) {
-            clearInterval(pingInterval);
-          }
-        }, 15000);
-
-        // Escuchar eventos de pedidos
-        const listener = (data) => {
-          // Filtrar: Los administradores reciben todos los eventos; los clientes solo sus propios pedidos
-          if (esAdmin || data.usuario_id === usuarioId) {
-            sendEvent("pedido_actualizado", data);
-          }
-        };
-
-        orderEvents.on("pedido_actualizado", listener);
-
-        // Guardar referencia de desuscripcion y limpieza
-        controller._cleanup = () => {
-          clearInterval(pingInterval);
-          orderEvents.removeListener("pedido_actualizado", listener);
-        };
-      },
-      cancel(controller) {
-        if (controller && typeof controller._cleanup === "function") {
-          controller._cleanup();
-        }
-      },
-    });
-
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache, no-transform",
-        "Connection": "keep-alive",
-        "Access-Control-Allow-Origin": "*",
-        "X-Accel-Buffering": "no",
-      },
-    });
-  })
   // Grupo protegido para usuarios autenticados (clientes y administradores)
   .guard({
     beforeHandle: async ({ jwt, headers, set }) => {
@@ -187,8 +100,11 @@ export const pedidosRoutes = new Elysia({ prefix: "/api/pedidos" })
       const token = authHeader.split(" ")[1];
       const payload = await jwt.verify(token);
 
+      const targetUsuarioId = (payload.rol === "administrador" && body.cliente_id) ? body.cliente_id : payload.id;
+      const estadoInicial = (payload.rol === "administrador" && body.estado_inicial) ? body.estado_inicial : "pendiente";
+
       const resultado = await service.crearPedido({
-        usuario_id: payload.id,
+        usuario_id: targetUsuarioId,
         items: body.items,
         direccion_entrega: body.direccion_entrega,
         telefono_contacto: body.telefono_contacto,
@@ -197,6 +113,7 @@ export const pedidosRoutes = new Elysia({ prefix: "/api/pedidos" })
         distancia_km: body.distancia_km,
         comprobante_url: body.comprobante_url,
         tipo_entrega: body.tipo_entrega,
+        estado_inicial: estadoInicial,
       });
 
       if (resultado.errorStatus) {
@@ -220,6 +137,8 @@ export const pedidosRoutes = new Elysia({ prefix: "/api/pedidos" })
             notas: t.Optional(t.String()),
           })
         ),
+        cliente_id: t.Optional(t.Union([t.Number(), t.Null()])),
+        estado_inicial: t.Optional(t.Union([t.String(), t.Null()])),
         direccion_entrega: t.Optional(t.Union([t.String(), t.Null()])),
         telefono_contacto: t.Optional(t.Union([t.String(), t.Null()])),
         notas: t.Optional(t.Union([t.String(), t.Null()])),

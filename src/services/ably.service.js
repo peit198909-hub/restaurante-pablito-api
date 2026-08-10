@@ -1,28 +1,32 @@
 import Ably from "ably";
 
-let ablyClient = null;
+let ablyRest = null;
 
-export function getAblyClient() {
-  if (!ablyClient) {
-    const apiKey = process.env.ABLY_API_KEY || "RL2lOg.7FTCLg:r8vCLHJFQ6-2mpcAcGLiUG7g5EjNMhe0YGplmlf9U94";
+export function getAblyRest() {
+  if (!ablyRest) {
+    const apiKey = process.env.ABLY_API_KEY;
+    if (!apiKey) {
+      console.warn("⚠️ Advertencia: ABLY_API_KEY no está definida en las variables de entorno.");
+      return null;
+    }
     try {
-      ablyClient = new Ably.Realtime({ key: apiKey });
-      console.log("⚡ Ably Realtime inicializado en el servidor backend.");
+      ablyRest = new Ably.Rest({ key: apiKey });
+      console.log("⚡ Ably REST client inicializado en el servidor backend.");
     } catch (err) {
-      console.error("❌ Error inicializando Ably Realtime:", err.message);
+      console.error("❌ Error inicializando Ably REST:", err.message);
     }
   }
-  return ablyClient;
+  return ablyRest;
 }
 
 export async function publicarEventoPedido(eventoData) {
   try {
-    const client = getAblyClient();
+    const client = getAblyRest();
     if (!client) return;
 
     const channel = client.channels.get("restaurante-pablito-pedidos");
     await channel.publish("pedido_actualizado", eventoData);
-    console.log("⚡ Evento publicado en Ably Realtime:", eventoData.tipo || "actualizado", `Pedido #${eventoData.pedido_id}`);
+    console.log("⚡ Evento publicado con éxito en Ably Realtime:", eventoData.tipo || "actualizado", `Pedido #${eventoData.pedido_id}`);
   } catch (err) {
     console.error("❌ Error publicando evento en Ably:", err.message);
   }

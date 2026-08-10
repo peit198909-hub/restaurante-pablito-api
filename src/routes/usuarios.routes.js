@@ -271,5 +271,11 @@ export const usuariosRoutes = new Elysia({ prefix: "/api/usuarios" })
         const repartidores = await service.obtenerRepartidoresActivos();
         return { status: "success", repartidores };
       })
+
+      // 8. Listar todos los clientes activos (solo admin para POS)
+      .get("/clientes/lista", async () => {
+        const clientes = await service.obtenerClientesActivos();
+        return { status: "success", clientes };
+      })
     )
   );

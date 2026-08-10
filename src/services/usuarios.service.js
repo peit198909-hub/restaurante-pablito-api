@@ -119,3 +119,11 @@ export async function obtenerRepartidoresActivos() {
   });
   return result.rows || [];
 }
+
+// Obtener todos los clientes activos
+export async function obtenerClientesActivos() {
+  const result = await db.execute({
+    sql: `SELECT id, nombre, apellido, correo, telefono, direccion, rol, activo, creado_en FROM usuarios WHERE rol = 'cliente' AND activo = 1 ORDER BY nombre ASC`,
+  });
+  return result.rows || [];
+}
