@@ -69,7 +69,27 @@ const app = new Elysia()
   .get("/", () => ({
     status: "success",
     message: "Servidor de Restaurante Pablito API ejecutándose correctamente en JavaScript",
-  }));
+  }))
+  .get("/api/test-pusher", async ({ set }) => {
+    try {
+      const { publicarEventoPedido } = await import("./services/pusher.service.js");
+      await publicarEventoPedido({
+        tipo: "test",
+        pedido_id: 9999,
+        estado: "pendiente",
+        usuario_id: null,
+        repartidor_id: null,
+        mensaje: "🧪 Evento de prueba Pusher - ¡Todo funciona!",
+      });
+      return {
+        status: "success",
+        message: "Evento de prueba enviado a Pusher. Revisa la campana en el frontend.",
+      };
+    } catch (err) {
+      set.status = 500;
+      return { status: "error", message: err.message };
+    }
+  });
 
 // Solo escuchar en puerto si estamos en entorno de desarrollo local
 if (!process.env.VERCEL) {
