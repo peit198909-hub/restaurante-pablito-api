@@ -3,12 +3,13 @@ import Ably from "ably";
 let ablyRest = null;
 
 export function getAblyRest() {
+  const apiKey = process.env.ABLY_API_KEY;
+  if (!apiKey) {
+    console.warn("⚠️ Advertencia: ABLY_API_KEY no está definida en las variables de entorno.");
+    return null;
+  }
+
   if (!ablyRest) {
-    const apiKey = process.env.ABLY_API_KEY;
-    if (!apiKey) {
-      console.warn("⚠️ Advertencia: ABLY_API_KEY no está definida en las variables de entorno.");
-      return null;
-    }
     try {
       ablyRest = new Ably.Rest({ key: apiKey });
       console.log("⚡ Ably REST client inicializado en el servidor backend.");
