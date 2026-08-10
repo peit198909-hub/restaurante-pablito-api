@@ -25,6 +25,13 @@ export async function subirImagen(imagen, carpeta = "platos") {
     throw new Error("Cloudinary no está configurado correctamente. Verifica las variables de entorno.");
   }
 
+  // Asegurar configuración en runtime para entornos Serverless (Vercel)
+  cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+  });
+
   // Validar peso máximo del archivo: 5MB (5,242,880 bytes)
   const MAX_SIZE_BYTES = 5 * 1024 * 1024;
   if (typeof imagen === "string" && imagen.startsWith("data:image/")) {
