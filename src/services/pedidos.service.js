@@ -610,10 +610,18 @@ export async function procesarSiguientePedidoEnCola(repartidorId) {
 
       console.log(`🤖 Cola de pedidos: Pedido #${siguientePedido.id} asignado automáticamente al repartidor ID: ${repartidorId}`);
 
+      const pedidoInfoRes = await db.execute({
+        sql: "SELECT usuario_id, estado FROM pedidos WHERE id = ? LIMIT 1",
+        args: [siguientePedido.id],
+      });
+      const pedidoInfo = pedidoInfoRes.rows[0] || {};
+
       orderEvents.emit("pedido_actualizado", {
         tipo: "asignado",
         pedido_id: siguientePedido.id,
+        usuario_id: pedidoInfo.usuario_id,
         repartidor_id: repartidorId,
+        estado: pedidoInfo.estado || "pendiente",
       });
 
       return siguientePedido.id;
