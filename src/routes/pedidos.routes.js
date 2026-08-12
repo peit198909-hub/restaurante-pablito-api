@@ -134,7 +134,7 @@ export const pedidosRoutes = new Elysia({ prefix: "/api/pedidos" })
           t.Object({
             producto_id: t.Number(),
             cantidad: t.Number({ minimum: 1 }),
-            notas: t.Optional(t.String()),
+            notas: t.Optional(t.Union([t.String(), t.Null()])),
           })
         ),
         cliente_id: t.Optional(t.Union([t.Number(), t.Null()])),

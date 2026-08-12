@@ -124,7 +124,7 @@ export async function crearPedido({ usuario_id, items, direccion_entrega, telefo
     }
   }
 
-  const totalFinal = Math.round((totales.subtotal + totales.impuesto + costoEnvio) * 100) / 100;
+  const totalFinal = Math.round((totales.total + costoEnvio) * 100) / 100;
   const metodoPagoFinal = ["efectivo", "transferencia", "otro"].includes(metodo_pago) ? metodo_pago : "efectivo";
   const comprobanteUrlFinal = (metodoPagoFinal === "transferencia" && comprobante_url) ? comprobante_url : null;
 
@@ -449,11 +449,12 @@ export async function cambiarEstadoPedido(pedido_id, nuevoEstado) {
 export async function obtenerMetricasDashboard() {
   const ventasRes = await db.execute(`
     SELECT 
-      SUM(CASE WHEN estado = 'entregado' THEN total ELSE 0 END) as total_ventas,
-      SUM(CASE WHEN estado = 'entregado' AND DATE(creado_en) = DATE('now') THEN total ELSE 0 END) as ventas_hoy,
+      SUM(CASE WHEN estado != 'cancelado' THEN total ELSE 0 END) as total_ventas,
+      SUM(CASE WHEN estado != 'cancelado' AND (DATE(creado_en) = DATE('now') OR DATE(creado_en) = DATE('now', 'localtime') OR substr(creado_en, 1, 10) = DATE('now') OR substr(creado_en, 1, 10) = DATE('now', 'localtime')) THEN total ELSE 0 END) as ventas_hoy,
       COUNT(CASE WHEN estado = 'entregado' THEN 1 END) as entregados_count,
       COUNT(CASE WHEN estado IN ('pendiente', 'confirmado', 'en_preparacion', 'listo', 'en_camino') THEN 1 END) as activos_count,
       COUNT(CASE WHEN estado = 'cancelado' THEN 1 END) as cancelados_count,
+      COUNT(CASE WHEN estado != 'cancelado' THEN 1 END) as ventas_count,
       COUNT(*) as total_pedidos
     FROM pedidos
   `);
@@ -464,20 +465,33 @@ export async function obtenerMetricasDashboard() {
   const entregadosCount = Number(stats.entregados_count || 0);
   const activosCount = Number(stats.activos_count || 0);
   const canceladosCount = Number(stats.cancelados_count || 0);
+  const ventasCount = Number(stats.ventas_count || 0);
   const totalPedidos = Number(stats.total_pedidos || 0);
 
-  const ticketPromedio = entregadosCount > 0 ? (totalVentas / entregadosCount).toFixed(2) : "0.00";
+  const ticketPromedio = ventasCount > 0 ? (totalVentas / ventasCount).toFixed(2) : "0.00";
 
-  // Top 5 productos más vendidos
+  // Top 5 productos más vendidos (excluyendo ventas canceladas)
   const topRes = await db.execute(`
     SELECT pr.nombre, pr.categoria, pr.imagen_url, SUM(dp.cantidad) as total_vendidos, SUM(dp.subtotal) as total_ingresos
     FROM detalles_pedidos dp
     JOIN productos pr ON dp.producto_id = pr.id
     JOIN pedidos p ON dp.pedido_id = p.id
-    WHERE p.estado = 'entregado'
+    WHERE p.estado != 'cancelado'
     GROUP BY pr.id
     ORDER BY total_vendidos DESC
     LIMIT 5
+  `);
+
+  // Útimos 10 pedidos para el historial de ventas y deliveries en tiempo real
+  const ultimosRes = await db.execute(`
+    SELECT p.id, p.estado, p.subtotal, p.impuesto, p.costo_envio, p.total, p.metodo_pago, p.tipo_entrega, p.creado_en, p.actualizado_en,
+           u.nombre as cliente_nombre, u.apellido as cliente_apellido,
+           r.nombre as repartidor_nombre, r.apellido as repartidor_apellido
+    FROM pedidos p
+    LEFT JOIN usuarios u ON p.usuario_id = u.id
+    LEFT JOIN usuarios r ON p.repartidor_id = r.id
+    ORDER BY p.id DESC
+    LIMIT 10
   `);
 
   return {
@@ -489,6 +503,7 @@ export async function obtenerMetricasDashboard() {
     totalPedidos,
     ticketPromedio: Number(ticketPromedio),
     topProductos: topRes.rows || [],
+    ultimosPedidos: ultimosRes.rows || [],
   };
 }
 

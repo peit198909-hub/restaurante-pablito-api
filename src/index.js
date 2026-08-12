@@ -10,7 +10,7 @@ import { uploadRoutes } from "./routes/upload.routes.js";
 // Leer variables de entorno
 const port = process.env.PORT || 3000;
 const jwtSecret = process.env.JWT_SECRET || "clave_secreta_jwt_restaurante_pablito";
-const jwtExpiry = process.env.JWT_EXPIRY || "24h";
+const jwtExpiry = process.env.JWT_EXPIRY || "30d";
 
 if (!process.env.JWT_SECRET) {
   console.warn("⚠️ Advertencia: JWT_SECRET no está definida en las variables de entorno. Usando clave por defecto para desarrollo.");
