@@ -97,8 +97,8 @@ export async function crearPedido({ usuario_id, items, direccion_entrega, telefo
       direccionFinal = "Retiro en el local — Restaurante Pablito";
     }
   } else {
-    if (!direccionFinal) {
-      return { errorStatus: 422, message: "Debe proporcionar una dirección de entrega para el pedido a domicilio" };
+    if (!direccionFinal || direccionFinal.trim().length < 3) {
+      return { errorStatus: 422, message: "Es obligatorio proporcionar una dirección de entrega válida para pedidos a domicilio." };
     }
   }
 
