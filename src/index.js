@@ -7,6 +7,7 @@ import { pedidosRoutes } from "./routes/pedidos.routes.js";
 import { repartidoresRoutes } from "./routes/repartidores.routes.js";
 import { configuracionRoutes } from "./routes/configuracion.routes.js";
 import { uploadRoutes } from "./routes/upload.routes.js";
+import { handleWSConnect, handleWSMessage, handleWSClose, publicarEventoWebSocket } from "./services/websocket.service.js";
 // Leer variables de entorno
 const port = process.env.PORT || 3000;
 const jwtSecret = process.env.JWT_SECRET || "clave_secreta_jwt_restaurante_pablito";
@@ -60,6 +61,17 @@ const app = new Elysia()
       message: error.message || "Ocurrió un error inesperado en el servidor",
     };
   })
+  .ws("/ws", {
+    open(ws) {
+      handleWSConnect(ws);
+    },
+    message(ws, message) {
+      handleWSMessage(ws, message);
+    },
+    close(ws) {
+      handleWSClose(ws);
+    },
+  })
   .use(usuariosRoutes)
   .use(productosRoutes)
   .use(pedidosRoutes)
@@ -70,20 +82,19 @@ const app = new Elysia()
     status: "success",
     message: "Servidor de Restaurante Pablito API ejecutándose correctamente en JavaScript",
   }))
-  .get("/api/test-pusher", async ({ set }) => {
+  .get("/api/test-websocket", async ({ set }) => {
     try {
-      const { publicarEventoPedido } = await import("./services/pusher.service.js");
-      await publicarEventoPedido({
+      await publicarEventoWebSocket({
         tipo: "test",
         pedido_id: 9999,
         estado: "pendiente",
         usuario_id: null,
         repartidor_id: null,
-        mensaje: "🧪 Evento de prueba Pusher - ¡Todo funciona!",
+        mensaje: "🧪 Evento de prueba WebSocket - ¡Todo funciona!",
       });
       return {
         status: "success",
-        message: "Evento de prueba enviado a Pusher. Revisa la campana en el frontend.",
+        message: "Evento de prueba enviado por WebSocket. Revisa la campana en el frontend.",
       };
     } catch (err) {
       set.status = 500;
@@ -91,10 +102,10 @@ const app = new Elysia()
     }
   });
 
-// Solo escuchar en puerto si estamos en entorno de desarrollo local
+// Solo escuchar en puerto si estamos en entorno de desarrollo local o Docker/Coolify
 if (!process.env.VERCEL) {
-  app.listen(port);
-  console.log(`Servidor de la API del Restaurante Pablito activo en: http://localhost:${port}`);
+  app.listen({ port: Number(port), hostname: "0.0.0.0" });
+  console.log(`Servidor de la API del Restaurante Pablito activo en: http://0.0.0.0:${port}`);
 }
 
 // Adaptador para Vercel Serverless Functions (Soporte dual req/res Node.js y Web Request/Fetch)
