@@ -402,7 +402,7 @@ export async function obtenerTodosPedidosAdmin(estado = null, fecha = null, page
 export async function cambiarEstadoPedido(pedido_id, nuevoEstado) {
   // Obtener estado actual
   const pedRes = await db.execute({
-    sql: "SELECT id, estado FROM pedidos WHERE id = ? LIMIT 1",
+    sql: "SELECT id, estado, tipo_entrega, direccion_entrega FROM pedidos WHERE id = ? LIMIT 1",
     args: [pedido_id],
   });
 
@@ -416,6 +416,17 @@ export async function cambiarEstadoPedido(pedido_id, nuevoEstado) {
   // Si ya esta en el mismo estado
   if (estadoActual === nuevoEstado) {
     return { pedido };
+  }
+
+  // Prevenir que pedidos de retiro en local pasen por el estado 'en_camino'
+  const esRetiro = pedido.tipo_entrega === "retiro" ||
+    (pedido.direccion_entrega && pedido.direccion_entrega.toLowerCase().includes("retiro"));
+
+  if (nuevoEstado === "en_camino" && esRetiro) {
+    return {
+      errorStatus: 400,
+      message: "El estado 'En Camino' solo está disponible para pedidos de Delivery a domicilio.",
+    };
   }
 
   // Validar si la transicion esta permitida
