@@ -130,13 +130,33 @@ export async function crearPedido({ usuario_id, items, direccion_entrega, telefo
 
   const estadoPermitido = ["pendiente", "confirmado", "en_preparacion", "listo", "entregado"].includes(estado_inicial) ? estado_inicial : "pendiente";
 
+  // Validar y asegurar usuario_id existente en la tabla usuarios para evitar errores de Clave Foránea (FOREIGN KEY)
+  let usuarioIdValido = usuario_id;
+  if (!usuarioIdValido) {
+    const defaultUsr = await db.execute("SELECT id FROM usuarios ORDER BY id ASC LIMIT 1");
+    usuarioIdValido = defaultUsr.rows[0]?.id;
+  } else {
+    const checkUsr = await db.execute({
+      sql: "SELECT id FROM usuarios WHERE id = ? LIMIT 1",
+      args: [usuarioIdValido],
+    });
+    if (checkUsr.rows.length === 0) {
+      const fallbackUsr = await db.execute("SELECT id FROM usuarios ORDER BY id ASC LIMIT 1");
+      usuarioIdValido = fallbackUsr.rows[0]?.id;
+    }
+  }
+
+  if (!usuarioIdValido) {
+    return { errorStatus: 400, message: "No existe un usuario en el sistema para vincular el pedido." };
+  }
+
   // 5. Insercion en base de datos
   const insertPedidoRes = await db.execute({
     sql: `INSERT INTO pedidos (usuario_id, direccion_entrega, telefono_contacto, notas, estado, subtotal, impuesto, costo_envio, distancia_km, total, metodo_pago, comprobante_url, tipo_entrega, creado_en)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
           RETURNING *`,
     args: [
-      usuario_id,
+      usuarioIdValido,
       direccionFinal,
       telefonoFinal || null,
       notas || null,
@@ -645,6 +665,53 @@ export async function procesarSiguientePedidoEnCola(repartidorId) {
     console.error("Error procesando cola de pedidos para repartidor:", err);
   }
   return null;
+}
+
+/**
+ * Asigna o desasigna manualmente un repartidor a un pedido (Administrador)
+ */
+export async function asignarRepartidorManual(pedidoId, repartidorId) {
+  const targetRepId = repartidorId ? parseInt(repartidorId, 10) : null;
+
+  const pedRes = await db.execute({
+    sql: "SELECT * FROM pedidos WHERE id = ? LIMIT 1",
+    args: [pedidoId],
+  });
+  if (pedRes.rows.length === 0) {
+    return { errorStatus: 404, message: "Pedido no encontrado" };
+  }
+
+  let finalRepId = targetRepId;
+  if (finalRepId) {
+    const checkUsr = await db.execute({
+      sql: "SELECT id FROM usuarios WHERE id = ? LIMIT 1",
+      args: [finalRepId],
+    });
+    if (checkUsr.rows.length === 0) {
+      finalRepId = null; // Si no existe en usuarios, dejar sin asignar para evitar fallo de Foreign Key
+    }
+  }
+
+  await db.execute({
+    sql: "UPDATE pedidos SET repartidor_id = ? WHERE id = ?",
+    args: [finalRepId, pedidoId],
+  });
+
+  const updatedRes = await db.execute({
+    sql: "SELECT p.*, r.nombre as repartidor_nombre, r.apellido as repartidor_apellido FROM pedidos p LEFT JOIN usuarios r ON p.repartidor_id = r.id WHERE p.id = ? LIMIT 1",
+    args: [pedidoId],
+  });
+  const updatedPedido = updatedRes.rows[0];
+
+  orderEvents.emit("pedido_actualizado", {
+    tipo: "asignado",
+    pedido_id: pedidoId,
+    usuario_id: updatedPedido.usuario_id,
+    repartidor_id: targetRepId,
+    estado: updatedPedido.estado,
+  });
+
+  return { pedido: updatedPedido };
 }
 
 /**

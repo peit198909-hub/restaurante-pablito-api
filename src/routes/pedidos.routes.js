@@ -234,6 +234,31 @@ export const pedidosRoutes = new Elysia({ prefix: "/api/pedidos" })
           estado: t.String(),
         })
       })
+
+      // 4.5 Asignar repartidor/motorizado manualmente a un pedido (solo admin)
+      .patch("/:id/repartidor", async ({ params, body, set }) => {
+        const id = parseInt(params.id, 10);
+        if (isNaN(id)) {
+          set.status = 400;
+          return { status: "error", message: "ID de pedido invalido" };
+        }
+
+        const resultado = await service.asignarRepartidorManual(id, body.repartidor_id);
+        if (resultado.errorStatus) {
+          set.status = resultado.errorStatus;
+          return { status: "error", message: resultado.message };
+        }
+
+        return {
+          status: "success",
+          message: "Repartidor asignado con éxito",
+          pedido: resultado.pedido,
+        };
+      }, {
+        body: t.Object({
+          repartidor_id: t.Optional(t.Union([t.Number(), t.Null()])),
+        })
+      })
     )
 
     // 5. Obtener detalle/seguimiento de un pedido por ID (cliente propietario o admin)
