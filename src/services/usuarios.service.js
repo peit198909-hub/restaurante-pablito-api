@@ -9,15 +9,22 @@ export async function buscarUsuarioPorCorreo(correo) {
   return result.rows[0] || null;
 }
 
+function limpiarTelefono(tel) {
+  if (!tel) return null;
+  const limpio = String(tel).replace(/\D/g, "").slice(0, 10);
+  return limpio || null;
+}
+
 // Registra un nuevo cliente
 export async function registrarCliente({ nombre, apellido, correo, contrasena, telefono = null, direccion = null }) {
   const contrasenaHash = await Bun.password.hash(contrasena);
+  const telLimpio = limpiarTelefono(telefono);
   
   const result = await db.execute({
     sql: `INSERT INTO usuarios (nombre, apellido, correo, contrasena_hash, telefono, direccion, rol, activo, creado_en)
           VALUES (?, ?, ?, ?, ?, ?, 'cliente', 1, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
           RETURNING id, nombre, apellido, correo, telefono, direccion, rol, activo, creado_en, actualizado_en`,
-    args: [nombre, apellido, correo, contrasenaHash, telefono, direccion],
+    args: [nombre, apellido, correo, contrasenaHash, telLimpio, direccion],
   });
   
   return result.rows[0];
@@ -47,12 +54,13 @@ export async function verificarCredenciales(correo, contrasena) {
 
 // Actualiza los datos del perfil
 export async function actualizarPerfil(idUsuario, { nombre, apellido, telefono, direccion }) {
+  const telLimpio = limpiarTelefono(telefono);
   const result = await db.execute({
     sql: `UPDATE usuarios
           SET nombre = ?, apellido = ?, telefono = ?, direccion = ?, actualizado_en = datetime('now')
           WHERE id = ? AND activo = 1
           RETURNING id, nombre, apellido, correo, telefono, direccion, rol, activo, creado_en, actualizado_en`,
-    args: [nombre, apellido, telefono, direccion, idUsuario],
+    args: [nombre, apellido, telLimpio, direccion, idUsuario],
   });
   return result.rows[0] || null;
 }
@@ -87,12 +95,13 @@ export async function cambiarContrasena(idUsuario, contrasenaActual, contrasenaN
 // Crea un nuevo administrador
 export async function crearAdministrador({ nombre, apellido, correo, contrasena, telefono = null, direccion = null }) {
   const contrasenaHash = await Bun.password.hash(contrasena);
+  const telLimpio = limpiarTelefono(telefono);
   
   const result = await db.execute({
     sql: `INSERT INTO usuarios (nombre, apellido, correo, contrasena_hash, telefono, direccion, rol, activo)
           VALUES (?, ?, ?, ?, ?, ?, 'administrador', 1)
           RETURNING id, nombre, apellido, correo, telefono, direccion, rol, activo, creado_en, actualizado_en`,
-    args: [nombre, apellido, correo, contrasenaHash, telefono, direccion],
+    args: [nombre, apellido, correo, contrasenaHash, telLimpio, direccion],
   });
   
   return result.rows[0];
@@ -101,12 +110,13 @@ export async function crearAdministrador({ nombre, apellido, correo, contrasena,
 // Crea un nuevo repartidor (para inicio de sesión de delivery)
 export async function crearRepartidor({ nombre, apellido, correo, contrasena, telefono = null, direccion = null }) {
   const contrasenaHash = await Bun.password.hash(contrasena);
+  const telLimpio = limpiarTelefono(telefono);
   
   const result = await db.execute({
     sql: `INSERT INTO usuarios (nombre, apellido, correo, contrasena_hash, telefono, direccion, rol, activo)
           VALUES (?, ?, ?, ?, ?, ?, 'repartidor', 1)
           RETURNING id, nombre, apellido, correo, telefono, direccion, rol, activo, creado_en, actualizado_en`,
-    args: [nombre, apellido, correo, contrasenaHash, telefono, direccion],
+    args: [nombre, apellido, correo, contrasenaHash, telLimpio, direccion],
   });
   
   return result.rows[0];

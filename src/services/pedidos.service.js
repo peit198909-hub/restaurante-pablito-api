@@ -78,7 +78,7 @@ export async function crearPedido({ usuario_id, items, direccion_entrega, telefo
 
   // 2. Obtener direccion de entrega del perfil si no fue enviada
   let direccionFinal = direccion_entrega ? direccion_entrega.trim() : "";
-  let telefonoFinal = telefono_contacto ? telefono_contacto.trim() : "";
+  let telefonoFinal = telefono_contacto ? String(telefono_contacto).replace(/\D/g, "").slice(0, 10) : "";
 
   if (!direccionFinal || !telefonoFinal) {
     const usrRes = await db.execute({
@@ -88,7 +88,7 @@ export async function crearPedido({ usuario_id, items, direccion_entrega, telefo
     const usr = usrRes.rows[0];
     if (usr) {
       if (!direccionFinal) direccionFinal = usr.direccion || "";
-      if (!telefonoFinal) telefonoFinal = usr.telefono || "";
+      if (!telefonoFinal && usr.telefono) telefonoFinal = String(usr.telefono).replace(/\D/g, "").slice(0, 10);
     }
   }
 

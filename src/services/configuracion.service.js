@@ -50,7 +50,7 @@ export async function actualizarConfiguracion(datos) {
   const configActual = await obtenerConfiguracion();
 
   const nombre_negocio = datos.nombre_negocio !== undefined ? datos.nombre_negocio.trim() : configActual.nombre_negocio;
-  const telefono_contacto = datos.telefono_contacto !== undefined ? datos.telefono_contacto.trim() : configActual.telefono_contacto;
+  const telefono_contacto = datos.telefono_contacto !== undefined ? String(datos.telefono_contacto).replace(/\D/g, "").slice(0, 10) : configActual.telefono_contacto;
   const direccion_local = datos.direccion_local !== undefined ? datos.direccion_local.trim() : configActual.direccion_local;
   const hora_apertura = datos.hora_apertura !== undefined ? datos.hora_apertura.trim() : configActual.hora_apertura;
   const hora_cierre = datos.hora_cierre !== undefined ? datos.hora_cierre.trim() : configActual.hora_cierre;
